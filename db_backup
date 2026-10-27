@@ -1,0 +1,97 @@
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    job_title VARCHAR(255) NOT NULL DEFAULT '',
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at DATE NOT NULL DEFAULT CURRENT_DATE,
+    role VARCHAR(32) NOT NULL DEFAULT 'employee',
+    current_bookings JSONB NOT NULL DEFAULT '[]'::jsonb,
+    CONSTRAINT ck_users_role CHECK (role IN ('employee', 'it_admin', 'office_manager')),
+    CONSTRAINT ck_users_bookings_array CHECK (jsonb_typeof(current_bookings) = 'array')
+);
+
+CREATE TABLE IF NOT EXISTS desk_features (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description VARCHAR(512) NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS desks (
+    id SERIAL PRIMARY KEY,
+    floor INTEGER,
+    section INTEGER,
+    number INTEGER NOT NULL,
+    is_free BOOLEAN NOT NULL DEFAULT TRUE,
+    sockets INTEGER,
+    features JSONB NOT NULL DEFAULT '[]'::jsonb,
+    CONSTRAINT uq_desks_floor_number UNIQUE (floor, number),
+    CONSTRAINT ck_desks_sockets CHECK (sockets IS NULL OR sockets >= 0),
+    CONSTRAINT ck_desks_features_array CHECK (jsonb_typeof(features) = 'array')
+);
+
+CREATE TABLE IF NOT EXISTS bookings (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    desk_id INTEGER NOT NULL REFERENCES desks(id),
+    planed_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    duration INTERVAL NOT NULL,
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT LOCALTIMESTAMP,
+    is_cancelled BOOLEAN NOT NULL DEFAULT FALSE,
+    cancellation_reason VARCHAR(512),
+    cancelled_at TIMESTAMP WITHOUT TIME ZONE,
+    CONSTRAINT ck_bookings_duration CHECK (duration > INTERVAL '0 seconds')
+);
+
+CREATE TABLE IF NOT EXISTS equipment (
+    id SERIAL PRIMARY KEY,
+    desk_id INTEGER REFERENCES desks(id),
+    assigned_user_id INTEGER REFERENCES users(id),
+    type VARCHAR(128) NOT NULL,
+    socket_serial VARCHAR(128) UNIQUE,
+    socket_needed BOOLEAN NOT NULL DEFAULT FALSE,
+    status VARCHAR(32) NOT NULL DEFAULT 'in_stock',
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT LOCALTIMESTAMP,
+    CONSTRAINT ck_equipment_status CHECK (status IN ('in_stock', 'assigned', 'in_repair', 'written_off'))
+);
+
+CREATE TABLE IF NOT EXISTS tickets (
+    id SERIAL PRIMARY KEY,
+    author_id INTEGER NOT NULL REFERENCES users(id),
+    equipment_id INTEGER NOT NULL REFERENCES equipment(id),
+    description TEXT NOT NULL,
+    photo_url VARCHAR(1024),
+    status VARCHAR(32) NOT NULL DEFAULT 'new',
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT LOCALTIMESTAMP,
+    CONSTRAINT ck_tickets_status CHECK (status IN ('new', 'in_progress', 'resolved', 'closed'))
+);
+
+CREATE TABLE IF NOT EXISTS reports (
+    id SERIAL PRIMARY KEY,
+    report_type VARCHAR(64) NOT NULL,
+    generated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT LOCALTIMESTAMP,
+    data JSONB NOT NULL DEFAULT '{}'::jsonb,
+    generated_by INTEGER REFERENCES users(id),
+    status VARCHAR(32) NOT NULL DEFAULT 'ready',
+    CONSTRAINT ck_reports_data_object CHECK (jsonb_typeof(data) = 'object')
+);
+
+CREATE INDEX IF NOT EXISTS ix_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS ix_desks_features ON desks USING GIN(features);
+CREATE INDEX IF NOT EXISTS ix_bookings_user_id ON bookings(user_id);
+CREATE INDEX IF NOT EXISTS ix_bookings_desk_id ON bookings(desk_id);
+CREATE INDEX IF NOT EXISTS ix_bookings_planed_at ON bookings(planed_at);
+CREATE INDEX IF NOT EXISTS ix_equipment_desk_id ON equipment(desk_id);
+CREATE INDEX IF NOT EXISTS ix_equipment_assigned_user_id ON equipment(assigned_user_id);
+CREATE INDEX IF NOT EXISTS ix_equipment_socket_serial ON equipment(socket_serial);
+CREATE INDEX IF NOT EXISTS ix_tickets_author_id ON tickets(author_id);
+CREATE INDEX IF NOT EXISTS ix_tickets_equipment_id ON tickets(equipment_id);
+
+INSERT INTO desk_features (id, name, description) VALUES
+(1, 'Дополнительный монитор', 'Стол оборудован вторым монитором'),
+(2, 'USB Type-C', 'Док-станция или питание через USB Type-C'),
+(3, 'Тихая зона', 'Рабочее место в зоне пониженного шума'),
+(4, 'Регулируемый стол', 'Электрическая регулировка высоты')
+ON CONFLICT (id) DO NOTHING;
+SELECT setval(pg_get_serial_sequence('desk_features', 'id'),
+              GREATEST((SELECT COALESCE(MAX(id), 1) FROM desk_features), 1), true);
