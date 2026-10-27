@@ -24,6 +24,12 @@ DEFAULT_START_HOUR = 9
 MAX_DURATION_HOURS = 24
 
 
+def _local_datetime(value: dt.datetime) -> dt.datetime:
+    if value.utcoffset() is not None:
+        return value.astimezone().replace(tzinfo=None)
+    return value
+
+
 class BookingService:
     def __init__(
         self,
@@ -162,7 +168,7 @@ class BookingService:
         if not isinstance(planed_at, dt.datetime):
             raise ValidationError("Укажите дату и время начала брони")
         duration = self._duration(getattr(payload, "duration_hours", None))
-        start = planed_at.replace(microsecond=0)
+        start = _local_datetime(planed_at).replace(microsecond=0)
         end = start + duration
 
         self._lock_and_check_availability(int(desk_id), int(user_id))
@@ -190,6 +196,8 @@ class BookingService:
         if not isinstance(start_date, dt.datetime) or not isinstance(end_date, dt.datetime):
             raise ValidationError("Укажите корректный период бронирования")
 
+        start_date = _local_datetime(start_date)
+        end_date = _local_datetime(end_date)
         duration = self._duration(getattr(payload, "daily_duration_hours", None))
         first_day = start_date.date()
         last_day = end_date.date()
