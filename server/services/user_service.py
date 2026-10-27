@@ -1,0 +1,187 @@
+from __future__ import annotations
+
+import datetime as dt
+import secrets
+from typing import Any, Optional
+
+from sqlalchemy.exc import IntegrityError
+
+from server.core.exceptions import BadRequestError, NotFoundError, UnauthorizedError, ValidationError
+from server.core.security import hash_password, verify_password, hash_token_value
+from server.dto.user_dto import UserDTO
+from server.models.users import User, ROLES, ROLE_EMPLOYEE
+from server.models.auth import utc_now
+from server.repositories.user_repository import UserRepository
+from server.repositories.auth_repository import AuthRepository
+
+MIN_PASSWORD_LENGTH = 6
+DEFAULT_ROLE = ROLE_EMPLOYEE
+
+
+def _norm_email(email: Optional[str]) -> str:
+    return (email or "").strip().lower()
+
+
+def _validate_email(email: str) -> str:
+    if email.count("@") != 1 or any(char.isspace() for char in email) or email.startswith("@") or email.endswith("@") or "." not in email.split("@")[-1]:
+        raise BadRequestError("Укажите корректный адрес электронной почты")
+    return email
+
+
+def _validate_password(password: Optional[str]) -> str:
+    if not password or len(password) < MIN_PASSWORD_LENGTH:
+        raise ValidationError(
+            f"Пароль должен содержать не менее {MIN_PASSWORD_LENGTH} символов"
+        )
+    return password
+
+
+class UserService:
+    def __init__(self, user_repository: UserRepository) -> None:
+        self.user_repository = user_repository
+        self.auth_repository = AuthRepository(user_repository.session)
+
+
+    def get_user(self, user_id: int) -> UserDTO:
+        user = self.user_repository.get_user_by_id(user_id)
+        if user is None:
+            raise NotFoundError("Пользователь не найден")
+        return UserDTO.from_user(user)
+
+    def get_user_model(self, user_id: int) -> User:
+        user = self.user_repository.get_user_by_id(user_id)
+        if user is None:
+            raise NotFoundError("Пользователь не найден")
+        return user
+
+    def get_user_by_email(self, email: str) -> Optional[UserDTO]:
+        user = self.user_repository.get_user_by_email(_norm_email(email))
+        return UserDTO.from_user(user) if user else None
+
+    def get_all_users(self) -> list[UserDTO]:
+        return [UserDTO.from_user(user) for user in self.user_repository.get_all_users()]
+
+
+    def register(self, payload: Any) -> UserDTO:
+        full_name = (getattr(payload, "full_name", "") or "").strip()
+        email = _validate_email(_norm_email(getattr(payload, "email", None)))
+        password = _validate_password(getattr(payload, "password", None))
+        if not full_name:
+            raise BadRequestError("Укажите ФИО сотрудника")
+
+        if self.user_repository.get_user_by_email(email) is not None:
+            raise BadRequestError("Пользователь с такой почтой уже зарегистрирован")
+
+        role = (getattr(payload, "role", None) or DEFAULT_ROLE).strip().lower()
+        if role not in ROLES:
+            raise ValidationError("Выберите допустимую роль пользователя")
+        user = User(
+            full_name=full_name,
+            job_title=(getattr(payload, "job_title", "") or "").strip(),
+            email=email,
+            password_hash=hash_password(password),
+            role=role,
+            created_at=dt.date.today(),
+            current_bookings=[],
+        )
+        try:
+            user = self.user_repository.create_user(user)
+        except IntegrityError as error:
+            self.user_repository.rollback()
+            raise BadRequestError("Пользователь с такой почтой уже зарегистрирован") from error
+        return UserDTO.from_user(user)
+
+
+    create_user = register
+
+    def authenticate(self, email: str, password: str) -> UserDTO:
+        user = self.user_repository.get_user_by_email(_norm_email(email))
+        if user is None or not verify_password(password or "", user.password_hash):
+            raise UnauthorizedError("Неверный адрес почты или пароль")
+        return UserDTO.from_user(user)
+
+    def authenticate_model(self, email: str, password: str) -> User:
+        user = self.user_repository.get_user_by_email(_norm_email(email))
+        if user is None or not verify_password(password or "", user.password_hash):
+            raise UnauthorizedError("Неверный адрес почты или пароль")
+        return user
+
+
+    def update_profile(self, user_id: int, payload: Any) -> UserDTO:
+        user = self.user_repository.get_user_by_id(user_id)
+        if user is None:
+            raise NotFoundError("Пользователь не найден")
+
+        full_name = getattr(payload, "full_name", None)
+        email = getattr(payload, "email", None)
+        job_title = getattr(payload, "job_title", None)
+        if job_title is not None:
+            user.job_title = job_title.strip()
+
+        if full_name is not None:
+            cleaned = str(full_name).strip()
+            if not cleaned:
+                raise BadRequestError("ФИО не может быть пустым")
+            user.full_name = cleaned
+
+        if email is not None:
+            new_email = _validate_email(_norm_email(email))
+            if new_email != user.email:
+                if self.user_repository.get_user_by_email(new_email) is not None:
+                    raise BadRequestError("Эта почта уже используется другим сотрудником")
+                user.email = new_email
+
+        try:
+            user = self.user_repository.update_user(user)
+        except IntegrityError as error:
+            self.user_repository.rollback()
+            raise BadRequestError("Эта почта уже используется другим сотрудником") from error
+        return UserDTO.from_user(user)
+
+
+    update_user = update_profile
+
+    def set_role(self, user_id: int, role: str) -> UserDTO:
+        user = self.user_repository.get_user_by_id(user_id)
+        if user is None:
+            raise NotFoundError("Пользователь не найден")
+        candidate = (role or "").strip().lower()
+        if candidate not in ROLES:
+            raise ValidationError("Недопустимая роль пользователя")
+        user.role = candidate
+        return UserDTO.from_user(self.user_repository.update_user(user))
+
+
+    def issue_reset_code(self, email: str) -> str:
+        normalized = _validate_email(_norm_email(email))
+        user = self.user_repository.get_user_by_email(normalized)
+        if user is None:
+            raise BadRequestError("Пользователь с такой почтой не найден")
+        code = f"{secrets.randbelow(10 ** 6):06d}"
+        self.auth_repository.save_reset_code(
+            user.id, hash_token_value(code), utc_now() + dt.timedelta(minutes=30)
+        )
+        print(f"[UC-03] код сброса пароля для {normalized}: {code}", flush=True)
+        return code
+
+    def confirm_reset(self, email: str, code: str, new_password: str) -> UserDTO:
+        normalized = _validate_email(_norm_email(email))
+        password = _validate_password(new_password)
+        user = self.user_repository.get_user_by_email(normalized)
+        if user is None:
+            raise BadRequestError("Пользователь с такой почтой не найден")
+
+        provided = (code or "").strip()
+        valid = bool(provided) and self.auth_repository.consume_reset_code(user.id, hash_token_value(provided))
+        if not valid:
+            raise BadRequestError("Неверный или просроченный код подтверждения")
+
+        user.password_hash = hash_password(password)
+        self.auth_repository.revoke_user_sessions(user.id)
+        return UserDTO.from_user(self.user_repository.update_user(user))
+
+    def delete_user(self, user_id: int) -> bool:
+        return self.user_repository.delete_user(user_id)
+
+
+__all__ = ["UserService", "MIN_PASSWORD_LENGTH", "DEFAULT_ROLE"]
