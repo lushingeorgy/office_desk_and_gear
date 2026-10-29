@@ -37,6 +37,9 @@ class BookingDTO(BaseModel):
     desk_id: int
     planed_at: dt.datetime
     duration: str
+    is_cancelled: bool = False
+    cancellation_reason: str | None = None
+    cancelled_at: dt.datetime | None = None
 
     @classmethod
     def from_booking(cls, booking: Any) -> "BookingDTO":
@@ -46,6 +49,9 @@ class BookingDTO(BaseModel):
             desk_id=int(booking.desk_id),
             planed_at=booking.planed_at,
             duration=format_duration(booking.duration),
+            is_cancelled=booking.is_cancelled,
+            cancellation_reason=booking.cancellation_reason,
+            cancelled_at=booking.cancelled_at,
         )
 
 

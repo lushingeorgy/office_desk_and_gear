@@ -14,6 +14,9 @@ class UserDTO(BaseModel):
     job_title: str = ""
     email: str
     role: str
+    is_verified: bool = True
+    phone: str = ""
+    avatar_url: Optional[str] = None
     created_at: dt.date
     current_bookings: list[int] = Field(default_factory=list)
 
@@ -28,6 +31,9 @@ class UserDTO(BaseModel):
             job_title=user.job_title or "",
             email=user.email or "",
             role=user.role or "employee",
+            is_verified=user.is_verified,
+            phone=user.phone,
+            avatar_url=user.avatar_url,
             created_at=created or dt.date.today(),
             current_bookings=[int(value) for value in (user.current_bookings or [])],
         )
