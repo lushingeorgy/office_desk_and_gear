@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+from server.core.time import office_now
 from typing import Any, Optional
 
-from server.core.exceptions import ConflictError, NotFoundError, ValidationError
+from server.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from server.dto.ticket_dto import TicketDTO
 from server.models.tickets import (
     STATUS_CLOSED,
@@ -14,6 +15,7 @@ from server.models.tickets import (
 )
 from server.repositories.equipment_repository import EquipmentRepository
 from server.repositories.ticket_repository import TicketRepository
+from server.models.activity import Notification, TicketEvent
 
 
 class TicketService:
@@ -58,6 +60,13 @@ class TicketService:
             equipment = self.equipment_repository.get_equipment_by_id(equipment_id)
             if equipment is None:
                 raise NotFoundError("Единица техники не найдена")
+            from server.repositories.user_repository import UserRepository
+            from server.repositories.booking_repository import BookingRepository
+            user = UserRepository(self.ticket_repository.session).get_user_by_id(user_id)
+            if user is not None and user.role != "it_admin":
+                desk_ids = BookingRepository(self.ticket_repository.session).get_desk_ids_with_active_booking(user_id)
+                if equipment.assigned_user_id != user_id and equipment.desk_id not in desk_ids:
+                    raise ForbiddenError("Создать обращение можно для своего оборудования или техники на текущем рабочем месте")
 
         description = str(getattr(payload, "description", "") or "").strip()
         if not description:
@@ -65,6 +74,8 @@ class TicketService:
 
         photo_url = getattr(payload, "photo_url", None)
         photo_url = str(photo_url).strip() if photo_url not in (None, "") else None
+        from server.repositories.activity_repository import ActivityRepository
+        ActivityRepository(self.ticket_repository.session).validate_photo(photo_url, user_id)
 
         ticket = Ticket(
             author_id=int(user_id),
@@ -72,13 +83,19 @@ class TicketService:
             description=description,
             photo_url=photo_url,
             status=STATUS_NEW,
-            created_at=dt.datetime.now(),
+            created_at=office_now(),
         )
-        ticket = self.ticket_repository.create_ticket(ticket)
+        self.ticket_repository.session.add(ticket)
+        self.ticket_repository.flush()
+        self.ticket_repository.session.add(TicketEvent(ticket_id=ticket.id, author_id=user_id, kind="status", text=STATUS_NEW))
+        from server.repositories.user_repository import UserRepository
+        for administrator in UserRepository(self.ticket_repository.session).get_users_by_role("it_admin"):
+            self.ticket_repository.session.add(Notification(user_id=administrator.id, text=f"Новое обращение №{ticket.id}: оборудование №{equipment_id}"))
+        self.ticket_repository.commit()
         return TicketDTO.from_ticket(ticket)
 
 
-    def update_status(self, ticket_id: int, status: str) -> TicketDTO:
+    def update_status(self, ticket_id: int, status: str, author_id: Optional[int] = None) -> TicketDTO:
         ticket = self.ticket_repository.get_ticket_by_id(ticket_id)
         if ticket is None:
             raise NotFoundError("Тикет не найден")
@@ -97,6 +114,8 @@ class TicketService:
             )
 
         ticket.status = target
+        self.ticket_repository.session.add(TicketEvent(ticket_id=ticket.id, author_id=author_id or ticket.author_id, kind="status", text=target))
+        self.ticket_repository.session.add(Notification(user_id=ticket.author_id, text=f"Обращение №{ticket.id}: статус изменён на {target}"))
         ticket = self.ticket_repository.update_ticket(ticket)
         return TicketDTO.from_ticket(ticket)
 

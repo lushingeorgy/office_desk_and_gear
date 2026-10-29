@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import String, cast, or_, select
+from sqlalchemy.orm import selectinload
 
 from server.models.desks import Desk
+from server.models.desk_features import DeskFeature
 from server.repositories.base_repository import BaseRepository
 
 
@@ -34,25 +36,31 @@ class DeskRepository(BaseRepository):
         section: Optional[int] = None,
         sockets: Optional[int] = None,
         features: Optional[Iterable[int]] = None,
+        search: Optional[str] = None,
+        sort: str = "number", order: str = "asc", limit: int = 100, offset: int = 0,
     ) -> List[Desk]:
-        stmt = select(Desk)
+        stmt = select(Desk).options(selectinload(Desk.feature_records))
         if floor is not None:
             stmt = stmt.where(Desk.floor == int(floor))
         if section is not None:
             stmt = stmt.where(Desk.section == int(section))
         if sockets is not None:
             stmt = stmt.where(Desk.sockets.is_not(None), Desk.sockets >= int(sockets))
-        stmt = stmt.order_by(Desk.floor, Desk.section, Desk.number, Desk.id)
+        for feature_id in features or []:
+            stmt = stmt.where(Desk.feature_records.any(DeskFeature.id == int(feature_id)))
+        if search:
+            stmt = stmt.where(cast(Desk.number, String).ilike("%" + search + "%"))
+        column = {"number": Desk.number, "floor": Desk.floor, "sockets": Desk.sockets}.get(sort, Desk.number)
+        stmt = stmt.order_by(column.desc() if order == "desc" else column.asc(), Desk.id).limit(limit).offset(offset)
+        return list(self.session.scalars(stmt))
 
-        desks = list(self.session.execute(stmt).scalars().all())
-        wanted: Sequence[int] = [int(value) for value in (features or [])]
-        if not wanted:
-            return desks
-        return [
-            desk
-            for desk in desks
-            if all(feature in [int(v) for v in (desk.features or [])] for feature in wanted)
-        ]
+    def set_features(self, desk: Desk, feature_ids: Iterable[int]):
+        from server.core.exceptions import ValidationError
+        ids = set(int(value) for value in feature_ids)
+        records = list(self.session.scalars(select(DeskFeature).where(DeskFeature.id.in_(ids)))) if ids else []
+        if len(records) != len(ids):
+            raise ValidationError("Неизвестная характеристика рабочего места")
+        desk.feature_records = records
 
     def get_desks_by_feature_id(self, feature_id: int) -> List[Desk]:
         return self.get_desks_filtered(features=[feature_id])

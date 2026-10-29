@@ -50,8 +50,10 @@ class DeskService:
     def get_all_desks(self) -> list[DeskDTO]:
         return self.get_desks()
 
-    def _available_desks(self, desks) -> list[DeskDTO]:
-        occupied = BookingRepository(self.desk_repository.session).occupied_desk_ids()
+    def _available_desks(self, desks, start_at=None, end_at=None) -> list[DeskDTO]:
+        from server.services.booking_service import _local_datetime
+        repository = BookingRepository(self.desk_repository.session)
+        occupied = repository.occupied_between(_local_datetime(start_at), _local_datetime(end_at)) if start_at and end_at else repository.occupied_desk_ids()
         result = []
         for desk in desks:
             item = DeskDTO.from_desk(desk)
@@ -65,21 +67,23 @@ class DeskService:
         section: Optional[int] = None,
         sockets: Optional[int] = None,
         features: Optional[Iterable[int]] = None,
+        search: Optional[str] = None, sort: str = "number", order: str = "asc", limit: int = 100, offset: int = 0,
+        start_at=None, end_at=None,
     ) -> DeskListResult:
         requested = [int(value) for value in (features or [])]
         found = self.desk_repository.get_desks_filtered(
-            floor=floor, section=section, sockets=sockets, features=requested
+            floor=floor, section=section, sockets=sockets, features=requested, search=search, sort=sort, order=order, limit=limit, offset=offset
         )
         if found:
-            return DeskListResult(desks=self._available_desks(found))
+            return DeskListResult(desks=self._available_desks(found, start_at, end_at))
 
         if sockets is not None:
             softened = self.desk_repository.get_desks_filtered(
-                floor=floor, section=section, sockets=None, features=requested
+                floor=floor, section=section, sockets=None, features=requested, search=search, sort=sort, order=order, limit=limit, offset=offset
             )
             if softened:
                 return DeskListResult(
-                    desks=self._available_desks(softened),
+                    desks=self._available_desks(softened, start_at, end_at),
                     partial=True,
                     message=PARTIAL_MATCH_MESSAGE,
                 )
@@ -112,8 +116,8 @@ class DeskService:
             number=int(number),
             is_free=bool(getattr(payload, "is_free", True)),
             sockets=getattr(payload, "sockets", None),
-            features=[int(value) for value in (getattr(payload, "features", None) or [])],
         )
+        self.desk_repository.set_features(desk, getattr(payload, "features", None) or [])
         try:
             desk = self.desk_repository.create_desk(desk)
         except IntegrityError as error:
@@ -151,7 +155,7 @@ class DeskService:
                     value = bool(value)
                 setattr(desk, field_name, value)
         if "features" in data:
-            desk.features = [int(value) for value in (data["features"] or [])]
+            self.desk_repository.set_features(desk, data["features"] or [])
 
         try:
             desk = self.desk_repository.update_desk(desk)
@@ -164,6 +168,12 @@ class DeskService:
         desk = self.desk_repository.get_desk_by_id(desk_id)
         if desk is None:
             raise NotFoundError("Рабочее место не найдено")
+        from sqlalchemy import select, exists
+        from server.models.bookings import Booking
+        from server.models.equipment import Equipment
+        db = self.desk_repository.session
+        if db.scalar(select(exists().where(Booking.desk_id == desk_id))) or db.scalar(select(exists().where(Equipment.desk_id == desk_id))):
+            raise ConflictError("Нельзя удалить стол с историей броней или закреплённым оборудованием. Сделайте его недоступным")
         return self.desk_repository.delete_desk(desk_id)
 
 

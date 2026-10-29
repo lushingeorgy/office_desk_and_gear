@@ -9,7 +9,7 @@ import qrcode
 from sqlalchemy.exc import IntegrityError
 
 from server.core.config import settings
-from server.core.exceptions import ConflictError, NotFoundError, ValidationError
+from server.core.exceptions import ConflictError, ForbiddenError, NotFoundError, ValidationError
 from server.dto.equipment_dto import EquipmentDTO
 from server.models.equipment import (
     Equipment,
@@ -21,6 +21,7 @@ from server.repositories.booking_repository import BookingRepository
 from server.repositories.desk_repository import DeskRepository
 from server.repositories.equipment_repository import EquipmentRepository
 from server.repositories.user_repository import UserRepository
+from server.models.activity import Notification
 
 class EquipmentService:
     def __init__(
@@ -36,10 +37,12 @@ class EquipmentService:
         self.booking_repository = booking_repository
 
 
-    def get_equipment(self, equipment_id: int) -> EquipmentDTO:
+    def get_equipment(self, equipment_id: int, viewer: Any = None) -> EquipmentDTO:
         item = self.equipment_repository.get_equipment_by_id(equipment_id)
         if item is None:
             raise NotFoundError("Единица техники не найдена")
+        if viewer is not None and viewer.role == "employee" and item.assigned_user_id is not None and item.assigned_user_id != viewer.id:
+            raise ForbiddenError("Техника закреплена за другим сотрудником")
         return EquipmentDTO.from_equipment(item)
 
     def get_equipment_by_id(self, equipment_id: int) -> EquipmentDTO:
@@ -90,15 +93,19 @@ class EquipmentService:
                 raise NotFoundError("Сотрудник не найден")
 
         status = getattr(payload, "status", None) or (
-            STATUS_ASSIGNED if assigned_user_id is not None else STATUS_IN_STOCK
+            STATUS_ASSIGNED if assigned_user_id is not None or desk_id is not None else STATUS_IN_STOCK
         )
         if status not in EQUIPMENT_STATUSES:
             raise ValidationError("Недопустимый статус техники")
+        if status == STATUS_IN_STOCK and (assigned_user_id is not None or desk_id is not None):
+            raise ValidationError("Закреплённая техника не может иметь статус «на складе»")
 
         item = Equipment(
             desk_id=desk_id,
             assigned_user_id=assigned_user_id,
             type=type_name,
+            model=getattr(payload, "model", "") or "",
+            inventory_number=getattr(payload, "inventory_number", None),
             socket_serial=serial,
             socket_needed=bool(getattr(payload, "socket_needed", False)),
             status=status,
@@ -115,10 +122,12 @@ class EquipmentService:
         if item is None:
             raise NotFoundError("Единица техники не найдена")
 
-        data = payload.model_dump() if hasattr(payload, "model_dump") else dict(payload or {})
+        data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else dict(payload or {})
 
-        assigned_user_id = data.get("assigned_user_id", None)
+        assigned_user_id = data.get("assigned_user_id", item.assigned_user_id)
         desk_id = data.get("desk_id", item.desk_id) if "desk_id" in data else item.desk_id
+        if item.status in {"in_repair", "written_off"} and (assigned_user_id is not None or desk_id is not None):
+            raise ConflictError("Нельзя выдавать технику в ремонте или списанную технику")
 
         if assigned_user_id is not None and self.user_repository is not None:
             if self.user_repository.get_user_by_id(assigned_user_id) is None:
@@ -129,7 +138,9 @@ class EquipmentService:
 
         item.assigned_user_id = assigned_user_id
         item.desk_id = desk_id
-        item.status = STATUS_ASSIGNED if assigned_user_id is not None else STATUS_IN_STOCK
+        item.status = STATUS_ASSIGNED if assigned_user_id is not None or desk_id is not None else STATUS_IN_STOCK
+        if assigned_user_id is not None:
+            self.equipment_repository.session.add(Notification(user_id=assigned_user_id, text=f"Вам назначено оборудование: {item.type} (№{item.id})"))
         return EquipmentDTO.from_equipment(self.equipment_repository.update_equipment(item))
 
     def update_equipment(self, equipment_id: int, payload: Any) -> EquipmentDTO:
@@ -138,8 +149,13 @@ class EquipmentService:
             raise NotFoundError("Единица техники не найдена")
         data = payload.model_dump(exclude_none=True) if hasattr(payload, "model_dump") else dict(payload)
         data.pop("id", None)
+        for field in ("model", "inventory_number"):
+            if field in data:
+                setattr(item, field, data[field])
         if "type" in data:
-            item.type = str(data["type"])
+            item.type = str(data["type"]).strip()
+            if not item.type:
+                raise ValidationError("Укажите тип техники")
         if "socket_serial" in data:
             serial = data["socket_serial"]
             twin = self.equipment_repository.get_equipment_by_serial(serial)
@@ -162,6 +178,10 @@ class EquipmentService:
         item = self.equipment_repository.get_equipment_by_id(equipment_id)
         if item is None:
             raise NotFoundError("Единица техники не найдена")
+        from sqlalchemy import select, exists
+        from server.models.tickets import Ticket
+        if self.equipment_repository.session.scalar(select(exists().where(Ticket.equipment_id == equipment_id))):
+            raise ConflictError("Нельзя удалить технику с историей обращений. Используйте статус списания")
         return self.equipment_repository.delete_equipment(equipment_id)
 
 

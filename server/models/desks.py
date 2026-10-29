@@ -2,18 +2,22 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import Boolean, Index, Integer, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, CheckConstraint, Column, ForeignKey, Integer, Table, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from server.models import Base
+
+desk_feature_links = Table("desk_feature_links", Base.metadata,
+    Column("desk_id", ForeignKey("desks.id", ondelete="CASCADE"), primary_key=True),
+    Column("feature_id", ForeignKey("desk_features.id", ondelete="RESTRICT"), primary_key=True, index=True))
 
 
 class Desk(Base):
     __tablename__ = "desks"
     __table_args__ = (
         UniqueConstraint("floor", "number", name="uq_desks_floor_number"),
-        Index("ix_desks_features", "features", postgresql_using="gin"),
+        CheckConstraint("number > 0", name="ck_desks_number"),
+        CheckConstraint("sockets IS NULL OR sockets >= 0", name="ck_desks_sockets"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -22,9 +26,13 @@ class Desk(Base):
     number: Mapped[int] = mapped_column(Integer, nullable=False)
     is_free: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     sockets: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    features: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    feature_records = relationship("DeskFeature", secondary=desk_feature_links, lazy="selectin")
 
-    bookings = relationship("Booking", lazy="raise", back_populates="desk", cascade="all, delete-orphan")
+    @property
+    def features(self) -> list[int]:
+        return sorted(feature.id for feature in self.feature_records)
+
+    bookings = relationship("Booking", lazy="raise", back_populates="desk", passive_deletes=True)
     equipment = relationship("Equipment", lazy="raise",
         back_populates="desk",
         foreign_keys="Equipment.desk_id",

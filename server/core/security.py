@@ -1,78 +1,40 @@
-from __future__ import annotations
-
-import base64
+"""Password hashing and signed, revocable access tokens."""
 import hashlib
-import hmac
+import secrets
+import jwt
+from passlib.context import CryptContext
+from server.core.config import settings
 
-
-__all__ = ["hash_password", "verify_password", "hash_token_value"]
-
-
-_HASH_SCHEMES: list[str] = ["pbkdf2_sha256"]
-try:
-    import bcrypt as _bcrypt
-
-    _HASH_SCHEMES.append("bcrypt")
-except Exception:
-    pass
-
-try:
-    from passlib.context import CryptContext
-
-    _pwd_context = CryptContext(schemes=_HASH_SCHEMES, deprecated="auto")
-except Exception:
-    _pwd_context = None
-
-
-def _stdlib_hash(password: str, *, iterations: int = 29000) -> str:
-    salt = os_urandom_salt()
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
-    return "pbkdf2_sha256${}${}${}".format(
-        iterations,
-        base64.b64encode(salt).decode("ascii"),
-        base64.b64encode(digest).decode("ascii"),
-    )
-
-
-def os_urandom_salt(length: int = 16) -> bytes:
-    import os
-
-    return os.urandom(length)
-
+_passwords = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto", pbkdf2_sha256__default_rounds=600_000)
 
 def hash_password(password: str) -> str:
-    if not isinstance(password, str) or not password:
-        raise ValueError("Пароль не может быть пустым")
-    if _pwd_context is not None:
-        try:
-            return _pwd_context.hash(password)
-        except Exception:
-            pass
-    return _stdlib_hash(password)
-
+    return _passwords.hash(password)
 
 def verify_password(password: str, password_hash: str) -> bool:
-    if not password or not password_hash:
+    try:
+        return bool(_passwords.verify(password, password_hash))
+    except (ValueError, TypeError):
         return False
-    if _pwd_context is not None:
-        try:
-            return bool(_pwd_context.verify(password, password_hash))
-        except Exception:
-            pass
-    if password_hash.startswith("pbkdf2_sha256$"):
-        try:
-            _, iterations, salt_b64, digest_b64 = password_hash.split("$")
-            digest = hashlib.pbkdf2_hmac(
-                "sha256",
-                password.encode("utf-8"),
-                base64.b64decode(salt_b64),
-                int(iterations),
-            )
-            return hmac.compare_digest(digest, base64.b64decode(digest_b64))
-        except Exception:
-            return False
-    return False
-
 
 def hash_token_value(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return hashlib.sha256(value.encode()).hexdigest()
+
+def signing_secret() -> str:
+    if settings.JWT_SECRET:
+        if settings.ENVIRONMENT == "production" and len(settings.JWT_SECRET) < 32:
+            raise RuntimeError("JWT_SECRET must be at least 32 characters")
+        return settings.JWT_SECRET
+    if settings.ENVIRONMENT == "production":
+        raise RuntimeError("JWT_SECRET must be configured in production")
+    path = settings.DATA_DIR / "host-secret.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="ascii") as file:
+            file.write(secrets.token_urlsafe(48))
+        path.chmod(0o600)
+    except FileExistsError:
+        pass
+    return path.read_text(encoding="ascii").strip()
+
+def decode_access_token(token: str) -> dict:
+    return jwt.decode(token, signing_secret(), algorithms=["HS256"], issuer="office-desk-gear", options={"require": ["exp", "iat", "sub", "jti", "iss"]})

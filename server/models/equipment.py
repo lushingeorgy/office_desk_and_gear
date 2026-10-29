@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+from server.core.time import office_now
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from server.models import Base
@@ -17,6 +18,7 @@ EQUIPMENT_STATUSES = (STATUS_IN_STOCK, STATUS_ASSIGNED, STATUS_IN_REPAIR, STATUS
 
 class Equipment(Base):
     __tablename__ = "equipment"
+    __table_args__ = (CheckConstraint("status IN ('in_stock','assigned','in_repair','written_off')", name="ck_equipment_status"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     desk_id: Mapped[Optional[int]] = mapped_column(
@@ -26,13 +28,15 @@ class Equipment(Base):
         Integer, ForeignKey("users.id"), nullable=True, index=True
     )
     type: Mapped[str] = mapped_column(String(128), nullable=False)
+    model: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    inventory_number: Mapped[Optional[str]] = mapped_column(String(128), unique=True, nullable=True)
     socket_serial: Mapped[Optional[str]] = mapped_column(
         String(128), nullable=True, unique=True, index=True
     )
     socket_needed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=STATUS_IN_STOCK)
     created_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, nullable=False, default=dt.datetime.now
+        DateTime, nullable=False, default=office_now
     )
 
     desk = relationship("Desk", lazy="raise",

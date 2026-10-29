@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from server.core.time import office_now
 from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String
@@ -16,7 +17,7 @@ class Report(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     report_type: Mapped[str] = mapped_column(String(64), nullable=False)
     generated_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, nullable=False, default=dt.datetime.now
+        DateTime, nullable=False, default=office_now
     )
     data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     generated_by: Mapped[Optional[int]] = mapped_column(

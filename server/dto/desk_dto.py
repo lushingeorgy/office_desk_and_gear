@@ -13,6 +13,7 @@ class DeskDTO(BaseModel):
     section: Optional[int] = None
     number: int
     is_free: bool = True
+    is_operational: bool = True
     sockets: Optional[int] = None
     features: list[int] = Field(default_factory=list)
 
@@ -24,6 +25,7 @@ class DeskDTO(BaseModel):
             section=desk.section,
             number=int(desk.number),
             is_free=bool(desk.is_free),
+            is_operational=bool(desk.is_free),
             sockets=desk.sockets,
             features=[int(value) for value in (desk.features or [])],
         )

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+from server.core.time import office_now
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from server.models import Base
@@ -25,6 +26,7 @@ TICKET_TRANSITIONS: dict[str, set[str]] = {
 
 class Ticket(Base):
     __tablename__ = "tickets"
+    __table_args__ = (CheckConstraint("status IN ('new','in_progress','resolved','closed')", name="ck_tickets_status"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     author_id: Mapped[int] = mapped_column(
@@ -37,7 +39,7 @@ class Ticket(Base):
     photo_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=STATUS_NEW)
     created_at: Mapped[dt.datetime] = mapped_column(
-        DateTime, nullable=False, default=dt.datetime.now
+        DateTime, nullable=False, default=office_now
     )
 
     author = relationship("User", lazy="raise", back_populates="tickets")

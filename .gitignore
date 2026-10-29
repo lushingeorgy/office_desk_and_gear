@@ -42,3 +42,13 @@ tests/artifacts/
 tests/*.log
 server/data/*.log
 server/data/host-secret.txt
+server/data/
+.buildozer/
+bin/
+pip-build-tracker-*/
+pip-install-*/
+pip-ephem-wheel-cache-*/
+pip-unpack-*/
+pip-metadata-*/
+.buildenv/
+.venv-build/

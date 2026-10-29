@@ -22,6 +22,9 @@ class UserRepository(BaseRepository):
         stmt = select(User).order_by(User.full_name, User.id)
         return list(self.session.execute(stmt).scalars().all())
 
+    def get_users_by_role(self, role: str) -> List[User]:
+        return list(self.session.scalars(select(User).where(User.role == role)))
+
     def create_user(self, user: User) -> User:
         return self.add(user)
 

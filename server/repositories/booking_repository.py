@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from server.core.time import office_now
 from typing import List, Optional
 
 from sqlalchemy import select
@@ -35,7 +36,7 @@ class BookingRepository(BaseRepository):
     def get_bookings_by_user_id(self, user_id: int) -> List[Booking]:
         stmt = (
             select(Booking)
-            .where(Booking.user_id == int(user_id), Booking.is_cancelled.is_(False))
+            .where(Booking.user_id == int(user_id))
             .order_by(Booking.planed_at.desc(), Booking.id.desc())
         )
         return list(self.session.execute(stmt).scalars().all())
@@ -51,9 +52,9 @@ class BookingRepository(BaseRepository):
         )
         if day is not None:
             start, end = _day_bounds(day)
-            stmt = stmt.where(Booking.planed_at >= start, Booking.planed_at < end)
+            stmt = stmt.where(Booking.planed_at < end, Booking.planed_at + Booking.duration > start)
         elif not include_past:
-            stmt = stmt.where(Booking.planed_at >= dt.datetime.now())
+            stmt = stmt.where(Booking.planed_at >= office_now())
         stmt = stmt.order_by(Booking.planed_at, Booking.id)
         return list(self.session.execute(stmt).scalars().all())
 
@@ -85,6 +86,7 @@ class BookingRepository(BaseRepository):
         user_id: int,
         start: dt.datetime,
         end: dt.datetime,
+        exclude_booking_id: Optional[int] = None,
     ) -> Optional[Booking]:
         stmt = (
             select(Booking)
@@ -95,13 +97,15 @@ class BookingRepository(BaseRepository):
             )
             .order_by(Booking.planed_at)
         )
+        if exclude_booking_id is not None:
+            stmt = stmt.where(Booking.id != exclude_booking_id)
         for booking in self.session.execute(stmt).scalars().all():
             if booking.ends_at > start:
                 return booking
         return None
 
     def get_active_booking(self, user_id: int, now: Optional[dt.datetime] = None) -> Optional[Booking]:
-        moment = now or dt.datetime.now()
+        moment = now or office_now()
         stmt = (
             select(Booking)
             .where(
@@ -112,7 +116,7 @@ class BookingRepository(BaseRepository):
             .order_by(Booking.planed_at.desc())
         )
         for booking in self.session.execute(stmt).scalars().all():
-            if booking.ends_at >= moment:
+            if booking.ends_at > moment:
                 return booking
         return None
 
@@ -123,15 +127,15 @@ class BookingRepository(BaseRepository):
             select(Booking)
             .where(
                 Booking.is_cancelled.is_(False),
-                Booking.planed_at >= start,
                 Booking.planed_at < end,
+                Booking.planed_at + Booking.duration > start,
             )
             .order_by(Booking.planed_at)
         )
         return list(self.session.execute(stmt).scalars().all())
 
     def get_desk_ids_with_active_booking(self, user_id: int, now: Optional[dt.datetime] = None) -> List[int]:
-        moment = now or dt.datetime.now()
+        moment = now or office_now()
         stmt = select(Booking).where(
             Booking.user_id == int(user_id),
             Booking.is_cancelled.is_(False),
@@ -144,11 +148,15 @@ class BookingRepository(BaseRepository):
         return desk_ids
 
     def occupied_desk_ids(self, now: Optional[dt.datetime] = None) -> set[int]:
-        moment = now or dt.datetime.now()
+        moment = now or office_now()
         bookings = self.session.execute(select(Booking).where(
             Booking.is_cancelled.is_(False), Booking.planed_at <= moment,
         )).scalars().all()
         return {int(b.desk_id) for b in bookings if b.ends_at > moment}
+
+    def occupied_between(self, start: dt.datetime, end: dt.datetime) -> set[int]:
+        bookings = self.session.scalars(select(Booking).where(Booking.is_cancelled.is_(False), Booking.planed_at < end))
+        return {b.desk_id for b in bookings if b.ends_at > start}
 
     def create_booking(self, booking: Booking) -> Booking:
         return self.add(booking)

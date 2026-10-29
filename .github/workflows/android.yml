@@ -1,0 +1,43 @@
+name: Android APK
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'client/**'
+      - 'main.py'
+      - 'buildozer.spec'
+      - 'p4a-recipes/**'
+      - '.github/workflows/android.yml'
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git zip unzip autoconf libtool libltdl-dev pkg-config zlib1g-dev libncurses-dev libtinfo6 cmake ninja-build libffi-dev libssl-dev automake autopoint gettext ccache patch
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install 'git+https://github.com/kivy/buildozer.git@76bac28545c66bbcc671d49aca553a747d69608e' 'Cython==0.29.34'
+      - name: Check client source
+        run: python -m compileall -q client main.py
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: android-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**', '.github/workflows/android.yml') }}
+      - run: buildozer -v android debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OfficeDeskGear-android-debug
+          path: bin/*.apk
+          if-no-files-found: error
