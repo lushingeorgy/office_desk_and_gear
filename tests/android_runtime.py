@@ -62,25 +62,30 @@ class NativeSmoke:
         self.size = picture.size
         picture.save(self.directory / f"{self.sequence:03d}-{label}.png")
         gray = ImageOps.autocontrast(ImageOps.grayscale(picture))
-        # White text on Kivy's dark background becomes conventional OCR input.
-        enlarged = ImageOps.invert(gray).resize((gray.width * 2, gray.height * 2), Image.Resampling.LANCZOS)
-        data = pytesseract.image_to_data(enlarged, lang="rus+eng", config="--psm 11", output_type=pytesseract.Output.DICT)
-        lines = {}
-        for index, text in enumerate(data["text"]):
-            if normalized(text):
-                key = (data["block_num"][index], data["par_num"][index], data["line_num"][index])
-                lines.setdefault(key, []).append((text, data["left"][index] // 2, data["top"][index] // 2, data["width"][index] // 2, data["height"][index] // 2))
         output = []
-        for words in lines.values():
-            for start in range(len(words)):
-                for end in range(start + 1, len(words) + 1):
-                    part = words[start:end]
-                    text = normalized(" ".join(item[0] for item in part))
-                    x, y = min(item[1] for item in part), min(item[2] for item in part)
-                    right, bottom = max(item[1] + item[3] for item in part), max(item[2] + item[4] for item in part)
-                    output.append((text, (x + right) // 2, (y + bottom) // 2))
+        evidence = []
+        # The same screen contains light text on dark cards and dark text on
+        # blue action buttons. A single inverted pass loses the latter.
+        for polarity, variant in (("normal", gray), ("inverted", ImageOps.invert(gray))):
+            enlarged = variant.resize((gray.width * 2, gray.height * 2), Image.Resampling.LANCZOS)
+            data = pytesseract.image_to_data(enlarged, lang="rus+eng", config="--psm 11", output_type=pytesseract.Output.DICT)
+            lines = {}
+            for index, text in enumerate(data["text"]):
+                if normalized(text):
+                    key = (data["block_num"][index], data["par_num"][index], data["line_num"][index])
+                    lines.setdefault(key, []).append((text, data["left"][index] // 2, data["top"][index] // 2, data["width"][index] // 2, data["height"][index] // 2))
+            evidence.append(f"[{polarity}]")
+            evidence.extend(" ".join(word[0] for word in words) for words in lines.values())
+            for words in lines.values():
+                for start in range(len(words)):
+                    for end in range(start + 1, len(words) + 1):
+                        part = words[start:end]
+                        text = normalized(" ".join(item[0] for item in part))
+                        x, y = min(item[1] for item in part), min(item[2] for item in part)
+                        right, bottom = max(item[1] + item[3] for item in part), max(item[2] + item[4] for item in part)
+                        output.append((text, (x + right) // 2, (y + bottom) // 2))
         # These are fixture-screen labels, never private state or credentials.
-        (self.directory / f"{self.sequence:03d}-{label}.ocr.txt").write_text("\n".join(" ".join(w[0] for w in line) for line in lines.values()), encoding="utf-8")
+        (self.directory / f"{self.sequence:03d}-{label}.ocr.txt").write_text("\n".join(evidence), encoding="utf-8")
         return output
 
     def fatal_check(self):
@@ -211,7 +216,10 @@ class NativeSmoke:
         self.screenshot("cold-login")
         self.click("Настроить сервер")
         self.find("Подключение к серверу")
-        self.fill("Адрес API", API_URL)
+        # A populated Kivy field has a tiny floating hint. Locate its visible
+        # current value instead; the saved API and actual server login are
+        # independently asserted below.
+        self.fill("http://127.0.0.1:8000/api/v1", API_URL)
         self.click("Проверить и сохранить")
         self.find("С возвращением")
         self.check("Remote API address persisted by the shipping settings UI", self.state().get("api_url") == API_URL)

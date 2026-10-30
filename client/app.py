@@ -438,13 +438,14 @@ class OfficeDeskGearApp(MDApp):
             self.verify(values["email"])
 
     def register(self):
-        self.page_start("register", "Создать аккаунт", "Зарегистрируйте рабочий профиль и выберите роль в системе.")
-        fields = {"full_name": self.field("ФИО", required=True), "job_title": self.field("Должность", required=True),
-                  "email": self.field("Рабочая почта", required=True, kind="email"),
-                  "password": self.field("Пароль от 6 символов", required=True, secret=True),
-                  "confirm_password": self.field("Повторите пароль", required=True, secret=True)}
-        self._registration_role = self.choice("Роль", ROLES, "employee")
+        self.page_start("register", "Создать аккаунт", "Зарегистрируйте рабочий профиль и выберите должность.")
+        fields = {"full_name": self.field("ФИО", required=True)}
+        self._registration_role = self.choice("Должность", ROLES, "employee")
         self._registration_role.add_widget(MDTextFieldTrailingIcon(icon="menu-down"))
+        fields["job_title"] = self._registration_role
+        fields.update({"email": self.field("Рабочая почта", required=True, kind="email"),
+                  "password": self.field("Пароль от 6 символов", required=True, secret=True),
+                  "confirm_password": self.field("Повторите пароль", required=True, secret=True)})
         self.action("Создать аккаунт", lambda: self._register(fields, self._registration_role), True)
         self.action("У меня уже есть аккаунт", self.login)
 
@@ -1164,14 +1165,26 @@ class OfficeDeskGearApp(MDApp):
             path.write_bytes(base64.b64decode(encoded.split(",")[-1]))
             self.body.add_widget(Image(source=str(path), size_hint_y=None, height=dp(280), fit_mode="contain"))
             self.text(data.get("qr_code_url", ""), MUTED)
-            self.action("Поделиться / отправить на печать", lambda: self._share(path, "image/png"), True)
+            self.action("Распечатать QR-код", lambda: self._print(path), True)
+            self.action("Сохранить / поделиться", lambda: self._share(path, "image/png"))
             self.text("Изображение сохранено в приватном кэше до выхода из аккаунта", MUTED, size=12)
         self.job(lambda: self.api.admin_generate_qr(equipment["id"]), display)
+
+    def _print(self, path):
+        def ready(native):
+            self.note("Открыт системный просмотр печати" if native else
+                      "Изображение открыто. Выберите печать в просмотрщике", success=True)
+
+        try:
+            self.device.print_image(path, on_ready=ready,
+                                    on_error=lambda message: self.note(message, error=True))
+        except Exception:
+            self.note("Не удалось открыть изображение для печати", error=True)
 
     def _share(self, path, mime):
         try:
             self.device.share(path, mime)
-            self.note("Файл готов для отправки и печати", success=True)
+            self.note("Файл готов для отправки", success=True)
         except Exception:
             self.note("Не удалось открыть системное меню отправки", error=True)
 

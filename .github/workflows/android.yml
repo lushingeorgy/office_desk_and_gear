@@ -24,6 +24,40 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # Development APKs only: keep the same debug certificate across this
+      # branch/PR's test builds so adb install -r preserves private app data.
+      # A release signing key must never be placed in this public-repo cache.
+      - name: Restore development APK signing key
+        id: debug-signing
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-development-signing-v1-${{ runner.os }}
+      - name: Prepare development APK signing key
+        run: |
+          umask 077
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -noprompt -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -dname 'CN=Android Debug,O=Android,C=US' -keyalg RSA -keysize 2048 -validity 10000
+          fi
+          echo 'Development APK certificate SHA-256:'
+          keytool -exportcert -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey | sha256sum
+      - name: Preserve development APK signing key before building
+        if: steps.debug-signing.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: ${{ steps.debug-signing.outputs.cache-primary-key }}
+      - name: Require persisted development signing key
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: ${{ steps.debug-signing.outputs.cache-primary-key }}
+          lookup-only: true
+          fail-on-cache-miss: true
       - name: Linux build dependencies
         run: |
           sudo apt-get update
