@@ -7,6 +7,8 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -14,7 +16,7 @@ TEMP = ROOT / "tests" / "artifacts" / "client-unit"
 TEMP.mkdir(parents=True, exist_ok=True)
 tempfile.tempdir = str(TEMP)
 
-from client.core.storage import LocalState
+from client.core.storage import LocalState, TokenVault
 from client.core.worker import BackgroundWorker
 from client.services.api_client import ApiClient, ApiError
 from client.viewmodels.session import SessionViewModel
@@ -33,6 +35,50 @@ class Response:
 
 
 class ClientStateTests(unittest.TestCase):
+    def test_android_keystore_passes_java_varargs_as_strings(self):
+        testcase = self
+
+        class VerifiedKeySpec(Exception):
+            pass
+
+        class Store:
+            def load(self, _parameters):
+                pass
+
+            def containsAlias(self, _alias):
+                return False
+
+        class Builder:
+            def __init__(self, _alias, _purposes):
+                pass
+
+            def setBlockModes(self, *values):
+                testcase.assertEqual(("GCM",), values)
+
+            def setEncryptionPaddings(self, *values):
+                testcase.assertEqual(("NoPadding",), values)
+
+            def build(self):
+                return self
+
+        class Generator:
+            def init(self, spec):
+                testcase.assertIsInstance(spec, Builder)
+                raise VerifiedKeySpec()
+
+        # PyJNIus wraps positional varargs into Java arrays. A Python list here
+        # would create a nested array and fail before Android could save a key.
+        classes = {
+            "java.security.KeyStore": SimpleNamespace(getInstance=lambda _kind: Store()),
+            "javax.crypto.Cipher": object(),
+            "javax.crypto.KeyGenerator": SimpleNamespace(getInstance=lambda *_args: Generator()),
+            "android.security.keystore.KeyGenParameterSpec$Builder": Builder,
+            "android.security.keystore.KeyProperties": SimpleNamespace(PURPOSE_ENCRYPT=1, PURPOSE_DECRYPT=2),
+        }
+        with patch.dict(sys.modules, {"jnius": SimpleNamespace(autoclass=classes.__getitem__)}):
+            with self.assertRaises(VerifiedKeySpec):
+                TokenVault("android").seal("test-credential")
+
     def test_account_and_cache_survive_new_instance(self):
         with tempfile.TemporaryDirectory() as folder:
             state = LocalState(folder)
@@ -98,6 +144,28 @@ class ClientStateTests(unittest.TestCase):
         self.assertTrue(response.closed)
         api.close()
         self.assertIsNone(api._session)
+
+    def test_assignment_transport_distinguishes_removal_from_unchanged_fields(self):
+        calls = []
+
+        def transport(_method, _url, **kwargs):
+            calls.append(kwargs["json"])
+            return Response()
+
+        api = ApiClient(transport=transport)
+        try:
+            api.admin_assign_equipment(5, assigned_user_id=12, desk_id=18)
+            api.admin_assign_equipment(5, assigned_user_id=None)
+            api.admin_assign_equipment(5, assigned_user_id=None, desk_id=None)
+            api.admin_assign_equipment(5)
+        finally:
+            api.close()
+        self.assertEqual([
+            {"assigned_user_id": 12, "desk_id": 18},
+            {"assigned_user_id": None},
+            {"assigned_user_id": None, "desk_id": None},
+            {},
+        ], calls)
 
     def test_pause_defers_pool_close_until_active_response_finishes(self):
         entered, release = threading.Event(), threading.Event()
