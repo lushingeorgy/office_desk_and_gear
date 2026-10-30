@@ -171,14 +171,14 @@ def gui_main(restored=False):
         stage("registration view", app.register)
 
         def register():
-            values = {"full_name": "UI Smoke Employee", "job_title": "Специалист", "email": "ui-smoke@company.ru",
+            values = {"full_name": "UI Smoke Employee", "email": "ui-smoke@company.ru",
                       "password": "Smoke-password-2026", "confirm_password": "Smoke-password-2026"}
             fs = fields({"full_name": "ФИО", "job_title": "Должность", "email": "Рабочая почта",
                          "password": "Пароль от 6 символов", "confirm_password": "Повторите пароль"}, values)
-            role = field("Роль")
+            role = field("Должность")
             assert role.readonly and role._choice == "employee"
             assert {item["text"] for item in role._menu.items} == {"Сотрудник", "Офис-менеджер", "IT-администратор"}
-            choose_menu_option("Роль", "Офис-менеджер")
+            choose_menu_option("Должность", "Офис-менеджер")
             assert role._choice == "office_manager" and role.text == "Офис-менеджер"
             snap("registration")
             app._register(fs)
@@ -213,7 +213,8 @@ def gui_main(restored=False):
             app._login(fs)
         stage("employee login after reset", employee_login, lambda: expect_page("home"))
         stage("registration menu role survives verification reset and login",
-              lambda: (app.user["role"] == "office_manager" and app.api.get_me()["role"] == "office_manager")
+              lambda: (app.user["role"] == "office_manager" and app.user["job_title"] == "Офис-менеджер"
+                       and app.api.get_me()["role"] == "office_manager" and app.api.get_me()["job_title"] == "Офис-менеджер")
               or (_ for _ in ()).throw(AssertionError("Selected registration role was not saved")))
         stage("employee profile", app.profile)
 

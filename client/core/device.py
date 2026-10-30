@@ -1,5 +1,8 @@
 """Small native bridges; URI access is confined to user-selected media."""
+import logging
 from pathlib import Path
+
+LOG = logging.getLogger(__name__)
 
 
 class DeviceTools:
@@ -95,8 +98,51 @@ class DeviceTools:
         intent.setType(mime)
         intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        Activity.startActivity(Intent.createChooser(intent, "Поделиться или распечатать"))
+        Activity.startActivity(Intent.createChooser(intent, "Поделиться файлом"))
         return str(path)
+
+    def print_image(self, path, on_ready=None, on_error=None):
+        """Open Android's print preview; printing still requires the user's action.
+
+        Android's PrintManager must be invoked on its UI thread. Report the
+        result back on the Kivy thread, where status widgets can be updated.
+        The AndroidX print adapter owns the bitmap while its preview is open;
+        no Python callback or bitmap is retained after this request.
+        """
+        filename = str(Path(path).resolve(strict=True))
+        if self.platform != "android":
+            import webbrowser
+            if not webbrowser.open(Path(filename).as_uri()):
+                raise ValueError("Не удалось открыть изображение для печати")
+            if on_ready:
+                self.schedule(lambda _dt: on_ready(False))
+            return filename
+
+        from android.runnable import run_on_ui_thread
+        from jnius import autoclass
+
+        @run_on_ui_thread
+        def start_print():
+            try:
+                Activity = autoclass("org.kivy.android.PythonActivity").mActivity
+                BitmapFactory = autoclass("android.graphics.BitmapFactory")
+                PrintHelper = autoclass("androidx.print.PrintHelper")
+                bitmap = BitmapFactory.decodeFile(filename)
+                if bitmap is None:
+                    raise ValueError("Не удалось прочитать изображение для печати")
+                printer = PrintHelper(Activity)
+                printer.setScaleMode(PrintHelper.SCALE_MODE_FIT)
+                printer.printBitmap("Office Desk & Gear · " + Path(filename).name, bitmap)
+            except Exception:
+                LOG.exception("Android print preview could not be opened")
+                if on_error:
+                    self.schedule(lambda _dt: on_error("Не удалось открыть системную печать"))
+            else:
+                if on_ready:
+                    self.schedule(lambda _dt: on_ready(True))
+
+        start_print()
+        return filename
 
     def close(self):
         if self._activity_callback is not None:
