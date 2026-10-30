@@ -85,12 +85,12 @@ class EquipmentService:
 
         desk_id = getattr(payload, "desk_id", None)
         if desk_id is not None and self.desk_repository is not None:
-            if self.desk_repository.get_desk_by_id(desk_id) is None:
+            if not self.equipment_repository.desk_exists(desk_id):
                 raise NotFoundError("Рабочее место не найдено")
 
         assigned_user_id = getattr(payload, "assigned_user_id", None)
         if assigned_user_id is not None and self.user_repository is not None:
-            if self.user_repository.get_user_by_id(assigned_user_id) is None:
+            if not self.equipment_repository.user_exists(assigned_user_id):
                 raise NotFoundError("Сотрудник не найден")
 
         status = getattr(payload, "status", None) or (
@@ -131,10 +131,10 @@ class EquipmentService:
             raise ConflictError("Нельзя выдавать технику в ремонте или списанную технику")
 
         if assigned_user_id is not None and self.user_repository is not None:
-            if self.user_repository.get_user_by_id(assigned_user_id) is None:
+            if not self.equipment_repository.user_exists(assigned_user_id):
                 raise NotFoundError("Сотрудник не найден")
         if desk_id is not None and self.desk_repository is not None:
-            if self.desk_repository.get_desk_by_id(desk_id) is None:
+            if not self.equipment_repository.desk_exists(desk_id):
                 raise NotFoundError("Рабочее место не найдено")
 
         item.assigned_user_id = assigned_user_id

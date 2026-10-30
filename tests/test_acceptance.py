@@ -295,6 +295,8 @@ class PostgreSQLAcceptance(unittest.TestCase):
             self.assertEqual(user_id, item["assigned_user_id"])
             self.assertEqual(desk_id, item["desk_id"])
             self.assertEqual(expected_status, item["status"])
+            self.assertEqual(desk["number"] if desk_id is not None else None, item["desk_number"])
+            self.assertEqual(self.users["employee"]["full_name"] if user_id is not None else None, item["assigned_user_name"])
 
         try:
             api.admin_assign_equipment(equipment_id, assigned_user_id=employee_id, desk_id=desk["id"])
@@ -340,6 +342,53 @@ class PostgreSQLAcceptance(unittest.TestCase):
         self.request("POST", "/tickets", 201, role="other", payload={
             "equipment_id": shared["id"], "description": "Shared desk monitor needs service",
         })
+
+    def test_08d_equipment_display_fields_are_fresh_without_n_plus_one(self):
+        from sqlalchemy import event
+        from server.dto.equipment_dto import EquipmentDTO
+        from server.repositories.equipment_repository import EquipmentRepository
+
+        desk = self.create_desk(floor=17, section=3, number=101)
+        equipment = [self.create_equipment(desk_id=desk["id"], assigned_user_id=self.users["employee"]["id"])
+                     for _ in range(3)]
+        identifiers = {item["id"] for item in equipment}
+        for item in equipment:
+            self.assertEqual(101, item["desk_number"])
+            self.assertEqual(17, item["desk_floor"])
+            self.assertEqual(3, item["desk_section"])
+            self.assertEqual(self.users["employee"]["full_name"], item["assigned_user_name"])
+
+        statements = []
+
+        def counted(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        event.listen(self.engine, "before_cursor_execute", counted)
+        try:
+            with self.SessionLocal() as session:
+                records = EquipmentRepository(session).get_all_equipment()
+                displayed = [EquipmentDTO.from_equipment(item) for item in records if item.id in identifiers]
+                self.assertEqual(3, len(displayed))
+                for record in records:
+                    if record.desk is not None:
+                        self.assertNotIn("feature_records", record.desk.__dict__)
+                    if record.assigned_user is not None:
+                        self.assertNotIn("bookings", record.assigned_user.__dict__)
+            self.assertEqual(1, len(statements), "Equipment display should use one joined query, without loading nested collections")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", counted)
+
+        equipment_id = equipment[0]["id"]
+        changed = self.request("PATCH", f"/admin/equipment/{equipment_id}/assign", role="it_admin",
+                               payload={"assigned_user_id": self.users["other"]["id"]})
+        self.assertEqual(self.users["other"]["full_name"], changed["assigned_user_name"])
+        self.assertEqual(101, changed["desk_number"])
+        updated = self.request("PATCH", f"/admin/equipment/{equipment_id}", role="it_admin", payload={"model": "Display after reassignment"})
+        self.assertEqual(self.users["other"]["full_name"], updated["assigned_user_name"])
+        fresh = self.request("GET", f"/equipment/{equipment_id}", role="it_admin")
+        self.assertEqual("Display after reassignment", fresh["model"])
+        self.assertEqual(101, fresh["desk_number"])
+        self.assertEqual(self.users["other"]["full_name"], fresh["assigned_user_name"])
 
     def test_09_booking_conflicts_ownership_and_admin_notification(self):
         desk = self.create_desk()

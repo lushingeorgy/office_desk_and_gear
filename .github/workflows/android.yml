@@ -32,13 +32,43 @@ jobs:
           python -m pip install 'git+https://github.com/kivy/buildozer.git@76bac28545c66bbcc671d49aca553a747d69608e' 'Cython==0.29.34'
       - name: Check client source
         run: python -m compileall -q client main.py
+      - name: Compute native build fingerprint
+        id: native-fingerprint
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import configparser, hashlib, json, os, re
+          config = configparser.ConfigParser(interpolation=None)
+          config.read('buildozer.spec', encoding='utf-8')
+          keys = ('requirements', 'android.ndk', 'android.ndk_api', 'android.archs',
+                  'p4a.bootstrap', 'p4a.commit', 'p4a.branch', 'p4a.url', 'p4a.fork')
+          native = {key: config.get('app', key, fallback='').strip() for key in keys}
+          workflow = Path('.github/workflows/android.yml').read_text(encoding='utf-8')
+          native['buildozer'] = re.search(r'buildozer\.git@([0-9a-f]{40})', workflow).group(1)
+          native['host_python'] = re.search(r'python-version:\s*[\x22\x27]([^\x22\x27]+)', workflow).group(1)
+          native['host_cython'] = re.search(r'Cython==([0-9.]+)', workflow).group(1)
+          digest = hashlib.sha256(json.dumps(native, sort_keys=True, separators=(',', ':')).encode())
+          for path in sorted(Path('p4a-recipes').rglob('*')):
+              if path.is_file() and '__pycache__' not in path.parts and path.suffix not in {'.pyc', '.pyo'}:
+                  digest.update(path.as_posix().encode() + b'\0' + path.read_bytes().replace(b'\r\n', b'\n'))
+          fingerprint = digest.hexdigest()
+          key = f"android-native-v1-{os.environ['RUNNER_OS']}-{fingerprint}"
+          # Migrate the already-built v3 cache only for these exact native inputs.
+          # A later native dependency or recipe change must never restore that legacy distribution.
+          known_legacy = 'ab0a049dbb9f6d078a20f983baf9446e2f8259b7ec5a79842f5f76826e69243c'
+          legacy_prefix = f"android-v3-{os.environ['RUNNER_OS']}-" if fingerprint == known_legacy else ''
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'key={key}\nlegacy-prefix={legacy_prefix}\n')
+          print(f'Native build fingerprint: {fingerprint}')
+          PY
       - uses: actions/cache/restore@v4
         id: native-cache
         with:
           path: |
             ~/.buildozer
             .buildozer
-          key: android-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec', 'p4a-recipes/**') }}
+          key: ${{ steps.native-fingerprint.outputs.key }}
+          restore-keys: ${{ steps.native-fingerprint.outputs.legacy-prefix }}
       - run: buildozer -v android debug
       - name: Preserve native build cache
         continue-on-error: true
