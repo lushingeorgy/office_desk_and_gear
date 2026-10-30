@@ -146,12 +146,23 @@ class OfficeDeskGearApp(MDApp):
         return self.root_screen
 
     def on_start(self):
+        self._configure_system_bars()
         Window.bind(on_keyboard=self._on_keyboard)
         self.user = self.model.restore()
         if self.user:
             self.home()
         else:
             self.login()
+
+    def _configure_system_bars(self):
+        if platform == "android":
+            # The pinned p4a bridge observes WindowInsets on Android 15+ and
+            # pads the native content view. SDL then resizes Window normally;
+            # older Android versions already keep the surface inside the bars.
+            # Keep system bars visible and use the same background as the UI.
+            from android.display_cutout import update_system_ui
+            color = "#" + "".join(f"{round(channel * 255):02x}" for channel in BACKGROUND[:3])
+            update_system_ui(color, color, "Light", pad_status=True, pad_nav=True)
 
     def _layout(self, *_):
         self.body.width = max(dp(260), min(dp(620), self.root_screen.width - dp(48)))
@@ -427,18 +438,22 @@ class OfficeDeskGearApp(MDApp):
             self.verify(values["email"])
 
     def register(self):
-        self.page_start("register", "Создать аккаунт", "Зарегистрируйте рабочий профиль. Права администратора выдаёт IT-отдел.")
+        self.page_start("register", "Создать аккаунт", "Зарегистрируйте рабочий профиль и выберите роль в системе.")
         fields = {"full_name": self.field("ФИО", required=True), "job_title": self.field("Должность", required=True),
                   "email": self.field("Рабочая почта", required=True, kind="email"),
                   "password": self.field("Пароль от 6 символов", required=True, secret=True),
                   "confirm_password": self.field("Повторите пароль", required=True, secret=True)}
-        self.action("Создать аккаунт", lambda: self._register(fields), True)
+        self._registration_role = self.choice("Роль", ROLES, "employee")
+        self._registration_role.add_widget(MDTextFieldTrailingIcon(icon="menu-down"))
+        self.action("Создать аккаунт", lambda: self._register(fields, self._registration_role), True)
         self.action("У меня уже есть аккаунт", self.login)
 
-    def _register(self, fields):
+    def _register(self, fields, role=None):
         values = self.values(fields)
         if not values:
             return
+        selected_role = role if role is not None else getattr(self, "_registration_role", None)
+        values["role"] = selected_role._choice if selected_role is not None else "employee"
         if len(values["password"]) < 6 or values["password"] != values["confirm_password"]:
             fields["confirm_password"].error = True
             self.note("Пароль — от 6 символов. Пароли должны совпадать", error=True)
@@ -643,8 +658,10 @@ class OfficeDeskGearApp(MDApp):
             self.note("Профиль сохранён", success=True)
         self.mutate(request, saved)
 
-    def desks(self):
+    def desks(self, booking_notice=None, interval=None):
         self.page_start("desks", "Рабочие места", "Выберите дату, этаж и комплектацию. Кэш показывает последнее известное состояние.")
+        if booking_notice:
+            self.text("Бронирование не выполнено: " + booking_notice, ERROR)
         search = self.field("Поиск стола на сервере", self.filters["search"])
         date = self.field("Дата · ГГГГ-ММ-ДД", self.filters["date"], kind="date", required=True)
         self.action("Поиск и обновление", lambda: self._desk_search(search, date), True)
@@ -654,7 +671,7 @@ class OfficeDeskGearApp(MDApp):
         self.body.add_widget(self.desk_results)
         self.action("Предыдущие 20", lambda: self._desk_page(-20))
         self.action("Следующие 20", lambda: self._desk_page(20))
-        self._load_desks()
+        self._load_desks(interval=interval)
 
     def _desk_search(self, search, date):
         values = self.values({"date": date})
@@ -674,19 +691,21 @@ class OfficeDeskGearApp(MDApp):
         self.desk_offset = max(0, self.desk_offset + delta)
         self.desks()
 
-    def _load_desks(self):
+    def _load_desks(self, interval=None):
         filters = self.filters.copy()
         args = {k: int(filters[k]) if filters[k] else None for k in ("floor", "section", "sockets")}
         args.update(search=filters["search"] or None, sort=filters["sort"], order=filters["order"],
                     features=[int(v) for v in filters["features"].split(",") if v.strip()], limit=20, offset=self.desk_offset)
         day = dt.date.fromisoformat(filters["date"])
-        args.update(start_at=day.isoformat() + "T09:00:00", end_at=day.isoformat() + "T17:00:00")
+        start_at, end_at = interval or (dt.datetime.combine(day, dt.time(9)), dt.datetime.combine(day, dt.time(17)))
+        args.update(start_at=start_at.isoformat(), end_at=end_at.isoformat())
         key = "desks:" + repr(sorted(args.items())) + filters["date"]
 
         def fetch():
             desks = self.api.get_desks(**args)
             partial_message = self.api.last_meta.get("x-partial-match")
-            return {"desks": desks, "bookings": self.api.get_availability(date=filters["date"]), "partial": partial_message}
+            return {"desks": desks, "bookings": self.api.get_availability(date=filters["date"]), "partial": partial_message,
+                    "interval_label": start_at.strftime("%d.%m %H:%M") + "–" + end_at.strftime("%d.%m %H:%M")}
         self.job(fetch, self._display_desks, cache_key=key, cached=self._display_desks)
 
     def _display_desks(self, data):
@@ -694,6 +713,8 @@ class OfficeDeskGearApp(MDApp):
         desks, bookings = data.get("desks") or [], data.get("bookings") or []
         self.desk_has_more = len(desks) == 20
         self.text("Записи " + str(self.desk_offset + 1) + "–" + str(self.desk_offset + len(desks)) if desks else "Столы не найдены", MUTED, target=self.desk_results)
+        interval_label = data.get("interval_label", "09:00–17:00")
+        self.text("Доступность за " + interval_label, MUTED, target=self.desk_results)
         if data.get("partial") == "true":
             self.text("Точных совпадений нет. Показаны близкие варианты", ACCENT, target=self.desk_results)
         if self.map_mode:
@@ -719,7 +740,7 @@ class OfficeDeskGearApp(MDApp):
                 box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8), padding=dp(14), md_bg_color=SURFACE, radius=[dp(12)])
                 self.text(f"Стол {desk['number']} · этаж {desk.get('floor', '—')}", target=box, size=16)
                 self.text(f"Секция {desk.get('section', '—')} · розеток {desk.get('sockets', 0)}\n" +
-                          ("Свободен 09:00–17:00" if desk["is_free"] else "Занят в 09:00–17:00" if desk.get("is_operational", True) else "Вне эксплуатации") + (f" · броней за день: {busy}" if busy else ""), MUTED, target=box)
+                          ("Свободен в выбранное время" if desk["is_free"] else "Занят в выбранное время" if desk.get("is_operational", True) else "Вне эксплуатации") + (f" · броней за день: {busy}" if busy else ""), MUTED, target=box)
                 self.action("Подробнее и забронировать", partial(self.desk_detail, desk), target=box)
                 self.desk_results.add_widget(box)
 
@@ -803,15 +824,25 @@ class OfficeDeskGearApp(MDApp):
             return
 
         def request():
-            if booking:
-                result = self.api.update_booking(booking["id"], desk["id"], values["start"], values["duration"])
-            elif period:
-                result = self.api.create_booking_period(desk["id"], values["start"], values["end"] + "T23:59:59", values["duration"])
-            else:
-                result = self.api.create_booking(desk["id"], values["start"], values["duration"])
+            try:
+                if booking:
+                    result = self.api.update_booking(booking["id"], desk["id"], values["start"], values["duration"])
+                elif period:
+                    result = self.api.create_booking_period(desk["id"], values["start"], values["end"] + "T23:59:59", values["duration"])
+                else:
+                    result = self.api.create_booking(desk["id"], values["start"], values["duration"])
+            except ApiError as error:
+                if error.status_code != 409:
+                    raise
+                return {"conflict": str(error)}
             return result, self.api.last_meta.copy()
 
         def saved(data):
+            if isinstance(data, dict) and "conflict" in data:
+                self.filters["date"] = start.date().isoformat()
+                self.desk_offset, self.map_mode = 0, True
+                self.desks(booking_notice=data["conflict"], interval=(start, start + dt.timedelta(hours=values["duration"])))
+                return
             result, meta = data
             self.bookings()
             skipped = meta.get("x-skipped-days")
@@ -1422,6 +1453,7 @@ class OfficeDeskGearApp(MDApp):
         return True
 
     def on_resume(self):
+        self._configure_system_bars()
         if self._pause_camera_mode and self.page == "scanner":
             self.device.camera_permission(self._start_scanner)
         elif self.user and not self.busy:

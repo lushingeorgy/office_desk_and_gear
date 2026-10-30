@@ -127,7 +127,7 @@ class ApiClient:
         return self._request("POST", "/auth/register", json={
             "full_name": full_name.strip(), "email": email.strip().lower(),
             "password": password, "confirm_password": confirm_password or password,
-            "role": "employee", "job_title": job_title.strip(),
+            "role": role, "job_title": job_title.strip(),
         })
 
     def check_connection(self):

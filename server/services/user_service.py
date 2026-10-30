@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import secrets
+from enum import Enum
 from typing import Any, Optional
 
 from sqlalchemy.exc import IntegrityError
@@ -77,7 +78,10 @@ class UserService:
         if self.user_repository.get_user_by_email(email) is not None:
             raise ConflictError("Пользователь с такой почтой уже зарегистрирован")
 
-        role = DEFAULT_ROLE  # Administrative privileges are assigned by a trusted administrator.
+        role = getattr(payload, "role", DEFAULT_ROLE)
+        role = role.value if isinstance(role, Enum) else role
+        if not isinstance(role, str) or role not in ROLES:
+            raise ValidationError("Недопустимая роль пользователя")
         user = User(
             full_name=full_name,
             job_title=(getattr(payload, "job_title", "") or "").strip(),

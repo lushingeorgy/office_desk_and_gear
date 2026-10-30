@@ -84,8 +84,13 @@ class NativeSmoke:
         return output
 
     def fatal_check(self):
+        if not self.last_pid:
+            raise AssertionError("Android launch did not produce an app process; inspect saved logcat")
         text = self.logcat(app_only=True)
-        patterns = (r"FATAL EXCEPTION", r"Fatal signal \d+.*(?:python|officedeskgear)", r"(?:ImportError|ModuleNotFoundError):", r"dlopen failed:")
+        # logcat is restricted to the app PID. Android names the process
+        # "SDLActivity" in native crash lines, so package-name matching here
+        # would miss actual SIGILL/SIGSEGV failures and only time out on OCR.
+        patterns = (r"FATAL EXCEPTION", r"Fatal signal \d+", r"(?:ImportError|ModuleNotFoundError):", r"dlopen failed:", r"ndk_translation.*Undefined instruction")
         if any(re.search(pattern, text, flags=re.I) for pattern in patterns):
             raise AssertionError("Native/Python startup failure; inspect saved logcat")
 
@@ -122,6 +127,7 @@ class NativeSmoke:
         time.sleep(.7)
 
     def launch(self):
+        self.last_pid = None
         adb("shell", "am", "force-stop", PACKAGE)
         adb("shell", "monkey", "-p", PACKAGE, "-c", "android.intent.category.LAUNCHER", "1")
         for _ in range(10):
@@ -184,9 +190,16 @@ class NativeSmoke:
 
     def run(self, apk):
         adb("wait-for-device")
-        abi = adb("shell", "getprop", "ro.product.cpu.abilist")
-        self.check("Emulator explicitly advertises ARM64 translation", "arm64-v8a" in abi)
-        (self.directory / "device.json").write_text(json.dumps({"abis": abi, "native_bridge": adb("shell", "getprop", "ro.dalvik.vm.native.bridge"), "android": adb("shell", "getprop", "ro.build.version.release")}, indent=2), encoding="utf-8")
+        properties = {
+            "abis": "ro.product.cpu.abilist",
+            "native_bridge": "ro.dalvik.vm.native.bridge",
+            "android": "ro.build.version.release",
+            "sdk": "ro.build.version.sdk",
+            "fingerprint": "ro.build.fingerprint",
+        }
+        device = {name: adb("shell", "getprop", key) for name, key in properties.items()}
+        (self.directory / "device.json").write_text(json.dumps(device, indent=2), encoding="utf-8")
+        self.check("Emulator explicitly advertises ARM64 translation", "arm64-v8a" in device["abis"] and "x86_64" in device["abis"] and device["native_bridge"] not in ("", "0"))
         adb("install", "-r", "-t", str(apk.resolve()))
         adb("shell", "pm", "clear", PACKAGE)
         adb("shell", "wm", "size", "480x960")
@@ -237,7 +250,7 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "tests" / "artifacts" / "android-runtime")
     args = parser.parse_args()
     smoke = NativeSmoke(args.output)
-    outcome = {"passed": False, "kind": "Actual ARM64 APK on Android 11 Google APIs emulator with ARM translation; not a physical-device test"}
+    outcome = {"passed": False, "kind": "Actual ARM64 APK on Google APIs emulator with ARM translation; not a physical-device test"}
     try:
         smoke.run(args.apk)
         outcome["passed"] = True
