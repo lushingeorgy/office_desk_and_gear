@@ -2,6 +2,7 @@
 import json
 import secrets
 import smtplib
+import ssl
 from email.message import EmailMessage
 from server.core.config import settings
 from server.core.exceptions import ServiceError
@@ -24,7 +25,7 @@ def send_code(email: str, code: str, purpose: str):
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
             if settings.SMTP_TLS:
-                smtp.starttls()
+                smtp.starttls(context=ssl.create_default_context())
             if settings.SMTP_USER:
                 smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
             smtp.send_message(message)

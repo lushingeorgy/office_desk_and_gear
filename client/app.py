@@ -883,10 +883,23 @@ class OfficeDeskGearApp(MDApp):
                  cache_key="equipment:all" if admin else "equipment:my", cached=display)
 
     def equipment_detail(self, item):
-        self.page_start("equipment_detail", item["type"], f"Устройство #{item['id']} · {STATUSES.get(item['status'], item['status'])}")
+        inventory = item.get("inventory_number")
+        serial = item.get("socket_serial")
+        identity = f"Инв. №{inventory}" if inventory else f"Серийный №{serial}" if serial else "Оборудование"
+        self.page_start("equipment_detail", item["type"], identity + " · " + STATUSES.get(item["status"], item["status"]))
+        desk = "не закреплён"
+        if item.get("desk_number") is not None:
+            desk = "№" + str(item["desk_number"])
+            if item.get("desk_floor") is not None:
+                desk += " · этаж " + str(item["desk_floor"])
+            if item.get("desk_section") is not None:
+                desk += " · секция " + str(item["desk_section"])
+        elif item.get("desk_id") is not None:
+            desk = "место назначено"
+        user = item.get("assigned_user_name") or ("сотрудник назначен" if item.get("assigned_user_id") is not None else "не закреплён")
         self.text("Модель: " + str(item.get("model") or "—") + "\nСерийный номер: " + str(item.get("socket_serial") or "—") +
                   "\nИнвентарный номер: " + str(item.get("inventory_number") or "—") +
-                  f"\nСтол: {item.get('desk_id') or '—'}\nСотрудник: {item.get('assigned_user_id') or '—'}")
+                  f"\nСтол: {desk}\nСотрудник: {user}")
         self.action("Сообщить о проблеме", lambda: self.ticket_form(item), True)
         if self.user.get("role") == "it_admin":
             self.action("Изменить устройство", lambda: self.equipment_form(item))

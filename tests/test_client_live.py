@@ -100,6 +100,7 @@ def server_main():
 
 def gui_main(restored=False):
     from kivy.clock import Clock
+    from kivymd.uix.button import MDButton
     from client.app import OfficeDeskGearApp
     from client.core.storage import LocalState
     from PIL import Image
@@ -121,6 +122,17 @@ def gui_main(restored=False):
     def snap(name):
         screenshot_counter[0] += 1
         app.root.export_to_png(str(directory / (name + ".png")))
+
+    def choose_menu_option(title, text):
+        widget = field(title)
+        option = next(item for item in widget._menu.items if item["text"] == text)
+        option["on_release"]()
+        assert widget.text == text
+
+    def press_button(title):
+        button = next(widget for widget in app.body.walk()
+                      if isinstance(widget, MDButton) and any(getattr(child, "text", None) == title for child in widget.children))
+        button.dispatch("on_release")
 
     def expect_page(page):
         assert app.page == page, f"Expected {page}, got {app.page}: {app.status.text}"
@@ -274,6 +286,50 @@ def gui_main(restored=False):
         stage("equipment detail", equipment_detail)
         stage("equipment detail screenshot", lambda: snap("equipment"))
         stage("assignment form", lambda: app.assign_form(data["equipment"]))
+
+        def assignment_persisted(user_id, desk_id, status):
+            import requests
+
+            expect_page("equipment_detail")
+            # Read through a fresh HTTP request instead of trusting the UI's
+            # selected values or the PATCH response that populated the card.
+            with requests.get(app.api.base_url + f"/equipment/{data['equipment']['id']}",
+                              headers={"Authorization": "Bearer " + app.api.token}, timeout=5) as response:
+                response.raise_for_status()
+                item = response.json()
+            assert item["assigned_user_id"] == user_id, item
+            assert item["desk_id"] == desk_id, item
+            assert item["status"] == status, item
+            displayed_text = "\n".join(str(getattr(widget, "text", "")) for widget in app.body.walk())
+            expected_desk = f"№{data['desk']['number']} · этаж {data['desk']['floor']} · секция {data['desk']['section']}" if desk_id is not None else "не закреплён"
+            expected_user = data["assigned_employee"]["full_name"] if user_id is not None else "не закреплён"
+            assert "Стол: " + expected_desk in displayed_text, displayed_text
+            assert "Сотрудник: " + expected_user in displayed_text, displayed_text
+            data["equipment"] = item
+
+        def select_and_save_assignment():
+            employee = next(user for user in app.api.admin_list_users() if user["email"] == "ui-updated@company.ru")
+            data["assigned_employee"] = employee
+            choose_menu_option("Сотрудник", f"{employee['full_name']} · {employee['email']}")
+            choose_menu_option("Рабочее место", f"Стол {data['desk']['number']} · этаж {data['desk']['floor']}")
+            press_button("Сохранить назначение")
+        stage("save employee and desk selected in assignment menus", select_and_save_assignment,
+              lambda: assignment_persisted(data["assigned_employee"]["id"], data["desk"]["id"], "assigned"))
+        stage("assignment confirmation screenshot", lambda: snap("equipment-assigned"))
+        stage("reopen assignment to remove employee", lambda: app.assign_form(data["equipment"]))
+
+        def remove_employee_assignment():
+            choose_menu_option("Сотрудник", "Снять с сотрудника")
+            press_button("Сохранить назначение")
+        stage("remove employee through assignment menu while preserving desk", remove_employee_assignment,
+              lambda: assignment_persisted(None, data["desk"]["id"], "assigned"))
+        stage("reopen assignment to remove desk", lambda: app.assign_form(data["equipment"]))
+
+        def remove_desk_assignment():
+            choose_menu_option("Рабочее место", "Без закрепления за столом")
+            press_button("Сохранить назначение")
+        stage("remove desk through assignment menu and return equipment to stock", remove_desk_assignment,
+              lambda: assignment_persisted(None, None, "in_stock"))
         stage("QR display", lambda: app.qr_code(data["equipment"]))
         stage("QR screenshot", lambda: snap("qr"))
         stage("new ticket", lambda: app.ticket_form(data["equipment"]))

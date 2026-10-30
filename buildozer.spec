@@ -1,5 +1,5 @@
 [app]
-title = Office Desk & Gear
+title = Office Desk &amp; Gear
 package.name = officedeskgear
 package.domain = org.officedeskgear
 source.dir = .
