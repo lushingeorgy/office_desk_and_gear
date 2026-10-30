@@ -41,7 +41,7 @@ class EquipmentService:
         item = self.equipment_repository.get_equipment_by_id(equipment_id)
         if item is None:
             raise NotFoundError("Единица техники не найдена")
-        if viewer is not None and viewer.role == "employee" and item.assigned_user_id is not None and item.assigned_user_id != viewer.id:
+        if viewer is not None and viewer.role != "it_admin" and item.assigned_user_id is not None and item.assigned_user_id != viewer.id:
             raise ForbiddenError("Техника закреплена за другим сотрудником")
         return EquipmentDTO.from_equipment(item)
 
@@ -66,7 +66,8 @@ class EquipmentService:
         if self.booking_repository is not None:
             desk_ids = self.booking_repository.get_desk_ids_with_active_booking(user_id)
             for item in self.equipment_repository.get_equipment_by_desk_ids(desk_ids):
-                items.setdefault(int(item.id), item)
+                if item.assigned_user_id is None or item.assigned_user_id == user_id:
+                    items.setdefault(int(item.id), item)
 
         ordered = sorted(items.values(), key=lambda item: int(item.id))
         return [EquipmentDTO.from_equipment(item) for item in ordered]

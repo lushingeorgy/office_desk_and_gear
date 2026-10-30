@@ -26,6 +26,7 @@ p4a.bootstrap = sdl2
 p4a.branch = develop
 p4a.commit = 1c9a4b4f817847bd8505d972d1a0e6f965929a88
 p4a.local_recipes = ./p4a-recipes
+p4a.extra_args = --allow-minsdk-ndkapi-mismatch
 
 [buildozer]
 log_level = 2

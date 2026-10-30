@@ -282,6 +282,65 @@ class PostgreSQLAcceptance(unittest.TestCase):
         self.request("DELETE", f"/admin/equipment/{equipment_id}", 204, role="it_admin")
         self.request("GET", f"/equipment/{equipment_id}", 404, role="it_admin")
 
+    def test_08b_client_assignment_and_explicit_removal_persist(self):
+        from client.services.api_client import ApiClient
+
+        desk, equipment = self.create_desk(), self.create_equipment()
+        equipment_id, employee_id = equipment["id"], self.users["employee"]["id"]
+        api = ApiClient(base_url="http://testserver" + PREFIX, transport=self.client.request)
+        api.set_token(self.tokens["it_admin"])
+
+        def persisted(user_id, desk_id, expected_status="assigned"):
+            item = self.request("GET", f"/equipment/{equipment_id}", role="it_admin")
+            self.assertEqual(user_id, item["assigned_user_id"])
+            self.assertEqual(desk_id, item["desk_id"])
+            self.assertEqual(expected_status, item["status"])
+
+        try:
+            api.admin_assign_equipment(equipment_id, assigned_user_id=employee_id, desk_id=desk["id"])
+            persisted(employee_id, desk["id"])
+            self.assertIn(equipment_id, [item["id"] for item in self.request("GET", "/equipment/my")])
+
+            api.admin_assign_equipment(equipment_id)
+            persisted(employee_id, desk["id"])
+
+            api.admin_assign_equipment(equipment_id, assigned_user_id=None)
+            persisted(None, desk["id"])
+            self.assertNotIn(equipment_id, [item["id"] for item in self.request("GET", "/equipment/my")])
+
+            api.admin_assign_equipment(equipment_id, assigned_user_id=employee_id)
+            api.admin_assign_equipment(equipment_id, desk_id=None)
+            persisted(employee_id, None)
+
+            api.admin_assign_equipment(equipment_id, assigned_user_id=None, desk_id=None)
+            persisted(None, None, "in_stock")
+        finally:
+            api.close()
+
+    def test_08c_booked_desk_does_not_expose_another_employees_personal_device(self):
+        from server.core.time import office_now
+
+        desk = self.create_desk()
+        equipment = self.create_equipment(desk_id=desk["id"], assigned_user_id=self.users["employee"]["id"])
+        self.request("POST", "/bookings", 201, role="other", payload={
+            "desk_id": desk["id"],
+            "planed_at": (office_now() - dt.timedelta(minutes=10)).isoformat(),
+            "duration_hours": 1,
+        })
+        self.assertNotIn(equipment["id"], [item["id"] for item in self.request("GET", "/equipment/my", role="other")])
+        self.request("GET", f"/equipment/{equipment['id']}", 403, role="other")
+        self.request("GET", f"/equipment/{equipment['id']}", 403, role="office_manager")
+        self.request("POST", "/tickets", 403, role="other", payload={
+            "equipment_id": equipment["id"], "description": "Cannot report another employee's personal device",
+        })
+
+        # An unassigned shared device at the same booked desk remains usable.
+        shared = self.create_equipment(desk_id=desk["id"])
+        self.assertIn(shared["id"], [item["id"] for item in self.request("GET", "/equipment/my", role="other")])
+        self.request("POST", "/tickets", 201, role="other", payload={
+            "equipment_id": shared["id"], "description": "Shared desk monitor needs service",
+        })
+
     def test_09_booking_conflicts_ownership_and_admin_notification(self):
         desk = self.create_desk()
         start = (dt.datetime.now() + dt.timedelta(days=5)).replace(hour=9, minute=0, second=0, microsecond=0)

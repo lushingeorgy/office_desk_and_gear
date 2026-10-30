@@ -9,6 +9,8 @@ import requests
 
 from client.core.config import API_BASE_URL, REQUEST_TIMEOUT
 
+_UNSET = object()
+
 
 class ApiError(Exception):
     def __init__(self, message: str, status_code: int | None = None,
@@ -256,10 +258,11 @@ class ApiClient:
     def admin_generate_qr(self, equipment_id):
         return self._request("GET", f"/admin/equipment/{equipment_id}/qr")
 
-    def admin_assign_equipment(self, equipment_id, assigned_user_id=None, desk_id=None):
+    def admin_assign_equipment(self, equipment_id, assigned_user_id=_UNSET, desk_id=_UNSET):
+        """Omitted fields preserve assignment; an explicit None removes it."""
         body = {key: value for key, value in {
             "assigned_user_id": assigned_user_id, "desk_id": desk_id,
-        }.items() if value is not None}
+        }.items() if value is not _UNSET}
         return self._request("PATCH", f"/admin/equipment/{equipment_id}/assign",
                              json=body)
 

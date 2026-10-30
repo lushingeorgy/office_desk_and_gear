@@ -64,6 +64,8 @@ class TicketService:
             from server.repositories.booking_repository import BookingRepository
             user = UserRepository(self.ticket_repository.session).get_user_by_id(user_id)
             if user is not None and user.role != "it_admin":
+                if equipment.assigned_user_id is not None and equipment.assigned_user_id != user_id:
+                    raise ForbiddenError("Техника закреплена за другим сотрудником")
                 desk_ids = BookingRepository(self.ticket_repository.session).get_desk_ids_with_active_booking(user_id)
                 if equipment.assigned_user_id != user_id and equipment.desk_id not in desk_ids:
                     raise ForbiddenError("Создать обращение можно для своего оборудования или техники на текущем рабочем месте")
