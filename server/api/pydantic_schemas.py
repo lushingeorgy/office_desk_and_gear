@@ -56,6 +56,12 @@ __all__ = [
 ]
 
 
+class UserRole(str, Enum):
+    employee = "employee"
+    office_manager = "office_manager"
+    it_admin = "it_admin"
+
+
 class UserCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -63,7 +69,7 @@ class UserCreate(BaseModel):
     job_title: str = Field(default="", max_length=255)
     email: EmailAddress
     password: str = Field(min_length=6, max_length=1024)
-    role: Optional[str] = None
+    role: UserRole = UserRole.employee
     confirm_password: str = Field(min_length=6, max_length=1024)
 
     @model_validator(mode="after")

@@ -120,18 +120,16 @@ class PostgreSQLAcceptance(unittest.TestCase):
         cls.users = {}
         cls.tokens = {}
         for role in ("employee", "other", "it_admin", "office_manager"):
-            user, token = cls.register_user(role)
-            if role in {"it_admin", "office_manager"}:
-                from server.models.users import User
-                with SessionLocal.begin() as session:
-                    session.get(User, user["id"]).role = role
+            user, token = cls.register_user(role, role=role if role in {"it_admin", "office_manager"} else None)
             cls.users[role] = user
             cls.tokens[role] = token
 
     @classmethod
-    def register_user(cls, label: str):
+    def register_user(cls, label: str, *, role=None):
         email = f"{label}-{uuid.uuid4().hex}@company.ru"
         payload = {"full_name": "Acceptance " + label, "email": email, "password": PASSWORD, "confirm_password": PASSWORD}
+        if role is not None:
+            payload["role"] = role
         response = cls.client.post(PREFIX + "/auth/register", json=payload)
         if response.status_code != 201:
             raise AssertionError(f"Registration expected 201, got {response.status_code}: {response.text[:500]}")
@@ -209,15 +207,55 @@ class PostgreSQLAcceptance(unittest.TestCase):
             session.rollback()
             self.assertEqual("employee", session.get(User, self.users["employee"]["id"]).role)
 
-    def test_03_registration_validation_duplicate_and_no_self_elevation(self):
+    def test_03_registration_validation_duplicate_and_invalid_role(self):
         existing = self.users["employee"]["email"]
         self.request("POST", "/auth/register", 409, role=None, payload={"full_name": "Duplicate", "email": existing, "password": PASSWORD, "confirm_password": PASSWORD})
         self.request("POST", "/auth/register", 422, role=None, payload={"full_name": " ", "email": "invalid", "password": "123", "confirm_password": "other"})
         self.request("POST", "/auth/register", 422, role=None, payload={"full_name": "Mismatch", "email": f"mismatch-{uuid.uuid4().hex}@company.ru", "password": PASSWORD, "confirm_password": PASSWORD + "other"})
-        response = self.client.post(PREFIX + "/auth/register", json={"full_name": "Attacker", "email": f"attacker-{uuid.uuid4().hex}@company.ru", "password": PASSWORD, "confirm_password": PASSWORD, "role": "it_admin"})
-        self.assertIn(response.status_code, {201, 403, 422})
-        if response.status_code == 201:
-            self.assertEqual("employee", response.json()["role"])
+        self.request("POST", "/auth/register", 422, role=None, payload={"full_name": "Invalid role", "email": f"invalid-role-{uuid.uuid4().hex}@company.ru", "password": PASSWORD, "confirm_password": PASSWORD, "role": "superuser"})
+        self.assertEqual("employee", self.users["employee"]["role"], "Omitting a registration role must retain the employee default")
+
+    def test_03b_selected_registration_roles_persist_and_grant_their_permissions(self):
+        from server.models.users import User
+        for role in ("employee", "office_manager", "it_admin"):
+            with self.subTest(role=role):
+                user = self.users[role]
+                self.assertEqual(role, user["role"])
+                with self.SessionLocal() as session:
+                    self.assertEqual(role, session.get(User, user["id"]).role)
+                login = self.request("POST", "/auth/login", role=None, payload={"email": user["email"], "password": PASSWORD})
+                token = login["access_token"]
+                profile = self.request("GET", "/users/me", token=token)
+                self.assertEqual(role, profile["role"])
+                desk_payload = {"floor": 7, "section": 1, "number": int(uuid.uuid4().hex[:7], 16), "sockets": 2}
+                self.request("POST", "/admin/desks", 403 if role == "employee" else 201, token=token, payload=desk_payload)
+                equipment_payload = {"type": "Монитор", "model": "Selected-role fixture", "socket_serial": uuid.uuid4().hex, "inventory_number": uuid.uuid4().hex}
+                self.request("POST", "/admin/equipment", 201 if role == "it_admin" else 403, token=token, payload=equipment_payload)
+                changed = self.request("PATCH", "/users/me", token=token, payload={"role": "it_admin" if role == "employee" else "employee"})
+                self.assertEqual(role, changed["role"], "The profile endpoint must not change the registration role")
+                with self.SessionLocal() as session:
+                    self.assertEqual(role, session.get(User, user["id"]).role)
+
+    def test_03c_direct_service_rejects_invalid_registration_roles_and_profile_promotion(self):
+        from types import SimpleNamespace
+        from server.core.exceptions import ValidationError
+        from server.models.users import User
+        from server.repositories.user_repository import UserRepository
+        from server.services.user_service import UserService
+        for role in ("superuser", "", None, 42, ["it_admin"], {"role": "it_admin"}):
+            with self.subTest(role=role), self.SessionLocal() as session:
+                repository = UserRepository(session)
+                email = f"invalid-service-role-{uuid.uuid4().hex}@company.ru"
+                payload = SimpleNamespace(full_name="Invalid service role", email=email, password=PASSWORD, role=role)
+                with self.assertRaises(ValidationError):
+                    UserService(repository).register(payload)
+                self.assertIsNone(repository.get_user_by_email(email))
+        with self.SessionLocal() as session:
+            service = UserService(UserRepository(session))
+            changed = service.update_profile(self.users["employee"]["id"], SimpleNamespace(role="it_admin"))
+            self.assertEqual("employee", changed.role)
+        with self.SessionLocal() as session:
+            self.assertEqual("employee", session.get(User, self.users["employee"]["id"]).role)
 
     def test_04_authorization_ownership_and_safe_responses(self):
         for path in ("/users/me", "/desks", "/bookings", "/equipment/999999", "/tickets/my", "/notifications"):

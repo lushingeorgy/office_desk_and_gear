@@ -40,7 +40,7 @@ CREATE DATABASE office_desk_gear;
 .\.venv\Scripts\python.exe -m server.cli create-admin --email admin@company.ru --name "IT Administrator"
 ```
 
-Публичная регистрация создаёт только сотрудника. Должность не предоставляет административные права. Администратор может менять роли в приложении или командой:
+При регистрации роль выбирается из списка: сотрудник, офис-менеджер или IT-администратор. Выбранная роль сразу определяет права аккаунта после подтверждения почты; должность хранится отдельно. Администратор также может менять роли в приложении или командой:
 
 ```powershell
 .\.venv\Scripts\python.exe -m server.cli set-role --email manager@company.ru --role office_manager

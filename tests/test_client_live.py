@@ -175,6 +175,11 @@ def gui_main(restored=False):
                       "password": "Smoke-password-2026", "confirm_password": "Smoke-password-2026"}
             fs = fields({"full_name": "ФИО", "job_title": "Должность", "email": "Рабочая почта",
                          "password": "Пароль от 6 символов", "confirm_password": "Повторите пароль"}, values)
+            role = field("Роль")
+            assert role.readonly and role._choice == "employee"
+            assert {item["text"] for item in role._menu.items} == {"Сотрудник", "Офис-менеджер", "IT-администратор"}
+            choose_menu_option("Роль", "Офис-менеджер")
+            assert role._choice == "office_manager" and role.text == "Офис-менеджер"
             snap("registration")
             app._register(fs)
         stage("register through real API", register, lambda: expect_page("verify"))
@@ -207,6 +212,9 @@ def gui_main(restored=False):
             fs = fields({"email": "Рабочая почта", "password": "Пароль"}, {"email": "ui-smoke@company.ru", "password": "New-smoke-password-2026"})
             app._login(fs)
         stage("employee login after reset", employee_login, lambda: expect_page("home"))
+        stage("registration menu role survives verification reset and login",
+              lambda: (app.user["role"] == "office_manager" and app.api.get_me()["role"] == "office_manager")
+              or (_ for _ in ()).throw(AssertionError("Selected registration role was not saved")))
         stage("employee profile", app.profile)
 
         def employee_email_change():
@@ -263,6 +271,34 @@ def gui_main(restored=False):
             fs = fields({"start": "Дата и время начала", "duration": "Часов в день · 1–24"}, {"start": start, "duration": 8})
             app._booking_save(data["desk"], fs, False, None)
         stage("create booking through UI", create_booking, lambda: expect_page("bookings"))
+
+        stage("reopen the same booking interval", lambda: app.booking_form(data["desk"]))
+
+        def conflicting_booking():
+            data["conflict_requests"] = []
+            data["conflict_transport"] = app.api._transport
+            import requests
+            actual_transport = app.api._transport or requests.request
+
+            def observed(method, url, **kwargs):
+                response = actual_transport(method, url, **kwargs)
+                data["conflict_requests"].append((method, url, response.status_code))
+                return response
+            app.api._transport = observed
+            create_booking()
+
+        def conflict_recovered():
+            app.api._transport = data["conflict_transport"]
+            expect_page("desks")
+            text = "\n".join(str(getattr(widget, "text", "")) for widget in app.body.walk())
+            assert "Бронирование не выполнено" in text and "Выбранное время уже занято" in text, text
+            assert "Стол 701\nЗанят / закрыт" in text, text
+            requests = data["conflict_requests"]
+            conflict = next(index for index, row in enumerate(requests) if row[0] == "POST" and row[2] == 409)
+            assert any(row[0] == "GET" and "/desks" in row[1] for row in requests[conflict + 1:]), requests
+            assert any(row[0] == "GET" and "/availability" in row[1] for row in requests[conflict + 1:]), requests
+        stage("booking 409 refreshes availability and preserves its explanation", conflicting_booking, conflict_recovered)
+        stage("refreshed conflict map screenshot", lambda: snap("booking-conflict-refreshed"))
 
         def booking_detail():
             data["booking"] = app.api.get_booking_history()[0]
