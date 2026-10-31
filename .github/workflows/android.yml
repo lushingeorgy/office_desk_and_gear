@@ -104,6 +104,35 @@ jobs:
           key: ${{ steps.native-fingerprint.outputs.key }}
           restore-keys: ${{ steps.native-fingerprint.outputs.legacy-prefix }}
       - run: buildozer -v android debug
+      - name: Sign and verify the actual APK with the persisted development key
+        run: |
+          sdk_tools="$HOME/.buildozer/android/platform/android-sdk/build-tools"
+          tools_version=$(find "$sdk_tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)
+          signer="$sdk_tools/$tools_version/apksigner"
+          aligner="$sdk_tools/$tools_version/zipalign"
+          test -x "$signer" && test -x "$aligner"
+          mapfile -t apks < <(find bin -maxdepth 1 -type f -name '*.apk')
+          test "${#apks[@]}" -eq 1
+          apk="${apks[0]}"
+          mkdir -p tests/artifacts/android-signing
+          expected=$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey | sha256sum | awk '{print $1}')
+          printf '%s\n' "$expected" >tests/artifacts/android-signing/expected-certificate.sha256
+          "$signer" verify --verbose --print-certs "$apk" >tests/artifacts/android-signing/before.txt
+          # Align before signing, including native libraries on 16 KiB devices.
+          aligned="$RUNNER_TEMP/officedeskgear-development-aligned.apk"
+          "$aligner" -f -P 16 4 "$apk" "$aligned"
+          "$aligner" -c -P 16 4 "$aligned"
+          signed="$RUNNER_TEMP/officedeskgear-development-signed.apk"
+          "$signer" sign --ks "$HOME/.android/debug.keystore" --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android --v4-signing-enabled false \
+            --out "$signed" "$aligned"
+          "$signer" verify --verbose --print-certs "$signed" | tee tests/artifacts/android-signing/verified.txt
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' tests/artifacts/android-signing/verified.txt | tr 'A-F' 'a-f')
+          signer_count=$(grep -c '^Signer #[0-9][0-9]* certificate SHA-256 digest:' tests/artifacts/android-signing/verified.txt)
+          test "$signer_count" -eq 1 && test "$actual" = "$expected"
+          mv "$signed" "$apk"
+          echo "Verified development APK certificate SHA-256: $actual"
       - name: Preserve native build cache
         continue-on-error: true
         if: always() && steps.native-cache.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
@@ -118,6 +147,13 @@ jobs:
           name: OfficeDeskGear-android-debug
           path: bin/*.apk
           if-no-files-found: error
+      - name: Save APK signing verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfficeDeskGear-apk-signing
+          path: tests/artifacts/android-signing/
+          if-no-files-found: warn
   android-runtime:
     needs: apk
     runs-on: ubuntu-24.04
