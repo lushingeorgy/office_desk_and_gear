@@ -8,6 +8,8 @@ from server.core.exceptions import ValidationError
 from server.dto.report_dto import AnalyticsDTO, EquipmentIssueDTO
 from server.repositories.report_repository import ReportRepository
 from server.repositories.ticket_repository import TicketRepository
+from server.models.reports import Report
+from server.dto.report_dto import ReportDTO
 
 SECONDS_IN_HOUR = 3600.0
 
@@ -87,6 +89,20 @@ class ReportService:
     def build_report(self, start_date: Optional[Any] = None, end_date: Optional[Any] = None) -> dict:
         analytics = self.get_analytics(start_date, end_date)
         return analytics.model_dump(mode="json")
+
+    def save_report(self, user_id: int, start_date=None, end_date=None):
+        report = Report(report_type="office_analytics", generated_by=user_id, data=self.build_report(start_date, end_date), status="ready")
+        return ReportDTO.from_report(self.report_repository.create_report(report))
+
+    def list_reports(self):
+        return [ReportDTO.from_report(item) for item in self.report_repository.get_all_reports()]
+
+    def get_report(self, identifier):
+        from server.core.exceptions import NotFoundError
+        report = self.report_repository.get_report_by_id(identifier)
+        if report is None:
+            raise NotFoundError("Отчёт не найден")
+        return ReportDTO.from_report(report)
 
 
 __all__ = ["ReportService", "SECONDS_IN_HOUR"]

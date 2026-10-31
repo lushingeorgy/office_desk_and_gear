@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+from server.core.time import office_now
 from typing import Any, Optional
 
 from sqlalchemy import update
+from zoneinfo import ZoneInfo
+from server.core.config import settings
+from server.models.activity import Notification
 from server.models.desks import Desk
 from server.models.users import User
 
@@ -26,7 +30,7 @@ MAX_DURATION_HOURS = 24
 
 def _local_datetime(value: dt.datetime) -> dt.datetime:
     if value.utcoffset() is not None:
-        return value.astimezone().replace(tzinfo=None)
+        return value.astimezone(ZoneInfo(settings.OFFICE_TIMEZONE)).replace(tzinfo=None)
     return value
 
 
@@ -61,10 +65,7 @@ class BookingService:
         desk = self._ensure_desk(desk_id)
         if desk is not None:
             db.refresh(desk)
-            now = dt.datetime.now()
-            if not desk.is_free or self.booking_repository.find_overlap(
-                desk_id, now, now + dt.timedelta(microseconds=1)
-            ) is not None:
+            if not desk.is_free:
                 raise ConflictError("Рабочее место сейчас занято или недоступно. Обновите схему этажа")
 
     @staticmethod
@@ -85,40 +86,22 @@ class BookingService:
         user_id: int,
         start: dt.datetime,
         end: dt.datetime,
+        exclude_booking_id: Optional[int] = None,
     ) -> None:
-        desk_conflict = self.booking_repository.find_overlap(desk_id, start, end)
+        desk_conflict = self.booking_repository.find_overlap(desk_id, start, end, exclude_booking_id)
         if desk_conflict is not None:
             raise ConflictError(
                 "Выбранное время уже занято: на это время есть бронь этого рабочего места"
             )
-        user_conflict = self.booking_repository.find_user_overlap(user_id, start, end)
+        user_conflict = self.booking_repository.find_user_overlap(user_id, start, end, exclude_booking_id)
         if user_conflict is not None:
-            raise ConflictError(
-                "У вас уже есть бронь на это время (рабочее место №"
-                f"{user_conflict.desk_id})"
-            )
+            raise ConflictError("У вас уже есть бронь на это время")
 
     def _attach_to_user(self, user_id: int, booking_id: int) -> None:
-        if self.user_repository is None:
-            return
-        user = self.user_repository.get_user_by_id(user_id)
-        if user is None:
-            return
-        current = [int(value) for value in (user.current_bookings or [])]
-        if booking_id not in current:
-            current.append(booking_id)
-        user.current_bookings = current
+        pass  # Foreign-key relationship is the single source of booking membership.
 
     def _detach_from_user(self, user_id: int, booking_id: int) -> None:
-        if self.user_repository is None:
-            return
-        user = self.user_repository.get_user_by_id(user_id)
-        if user is None:
-            return
-        current = [int(value) for value in (user.current_bookings or [])]
-        if booking_id in current:
-            current = [value for value in current if value != booking_id]
-            user.current_bookings = current
+        pass
 
 
     def get_booking(self, booking_id: int) -> Optional[BookingDTO]:
@@ -148,7 +131,7 @@ class BookingService:
             return self.get_all_bookings()
         return self.get_history(user_id)
 
-    def get_desk_bookings(self, desk_id: Optional[int], day: Optional[dt.date]) -> list[BookingDTO]:
+    def get_desk_bookings(self, desk_id: Optional[int], day: Optional[dt.date], owner_id: Optional[int] = None) -> list[BookingDTO]:
         if desk_id is None:
             bookings = self.booking_repository.get_bookings_between(
                 dt.datetime.combine(day, dt.time.min) if day else dt.datetime.min,
@@ -156,9 +139,13 @@ class BookingService:
                 if day
                 else dt.datetime.max,
             )
-            return [BookingDTO.from_booking(item) for item in bookings]
+            return [BookingDTO.from_booking(item) for item in bookings if owner_id is None or item.user_id == owner_id]
         bookings = self.booking_repository.get_bookings_by_desk_id(desk_id, day)
-        return [BookingDTO.from_booking(item) for item in bookings]
+        return [BookingDTO.from_booking(item) for item in bookings if owner_id is None or item.user_id == owner_id]
+
+    def availability(self, desk_id: Optional[int], day: Optional[dt.date]):
+        bookings = self.get_desk_bookings(desk_id, day)
+        return [{"desk_id": item.desk_id, "planed_at": item.planed_at, "duration": item.duration} for item in bookings]
 
 
     def create_booking(self, payload: Any, user_id: int) -> BookingDTO:
@@ -170,6 +157,8 @@ class BookingService:
         duration = self._duration(getattr(payload, "duration_hours", None))
         start = _local_datetime(planed_at).replace(microsecond=0)
         end = start + duration
+        if end <= office_now():
+            raise ValidationError("Нельзя бронировать завершившийся интервал")
 
         self._lock_and_check_availability(int(desk_id), int(user_id))
         self._check_conflicts(int(desk_id), int(user_id), start, end)
@@ -179,14 +168,30 @@ class BookingService:
             desk_id=int(desk_id),
             planed_at=start,
             duration=duration,
-            created_at=dt.datetime.now(),
+            created_at=office_now(),
             is_cancelled=False,
         )
         self.booking_repository.session.add(booking)
         self.booking_repository.flush()
         self._attach_to_user(int(user_id), int(booking.id))
         self.booking_repository.commit()
-        return BookingDTO.from_booking(booking)
+        return BookingDTO.from_booking(self.booking_repository.get_booking_by_id(booking.id))
+
+    def edit_booking(self, booking_id: int, payload: Any, user_id: int) -> BookingDTO:
+        booking = self.booking_repository.get_booking_by_id(booking_id)
+        if booking is None or booking.is_cancelled:
+            raise NotFoundError("Бронь не найдена")
+        if booking.user_id != user_id:
+            raise ForbiddenError("Можно изменить только собственную бронь")
+        start = _local_datetime(payload.planed_at).replace(microsecond=0)
+        duration = self._duration(payload.duration_hours)
+        if start + duration <= office_now():
+            raise ValidationError("Нельзя бронировать завершившийся интервал")
+        self._lock_and_check_availability(payload.desk_id, user_id)
+        self._check_conflicts(payload.desk_id, user_id, start, start + duration, booking_id)
+        booking.desk_id, booking.planed_at, booking.duration = payload.desk_id, start, duration
+        self.booking_repository.commit()
+        return BookingDTO.from_booking(self.booking_repository.get_booking_by_id(booking.id))
 
     def create_booking_period(self, payload: Any, user_id: int) -> tuple[list[BookingDTO], list[str]]:
         desk_id = getattr(payload, "desk_id", None)
@@ -210,14 +215,20 @@ class BookingService:
         start_time = start_date.time()
         if start_time == dt.time(0, 0):
             start_time = dt.time(DEFAULT_START_HOUR, 0)
+        if dt.datetime.combine(last_day, start_time) + duration <= office_now():
+            raise ValidationError("Нельзя бронировать завершившийся период")
 
         self._lock_and_check_availability(int(desk_id), int(user_id))
-        created: list[BookingDTO] = []
+        created: list[Booking] = []
         skipped: list[str] = []
         day = first_day
         while day <= last_day:
             start = dt.datetime.combine(day, start_time)
             end = start + duration
+            if end <= office_now():
+                skipped.append(day.isoformat())
+                day += dt.timedelta(days=1)
+                continue
             try:
                 self._lock_and_check_availability(int(desk_id), int(user_id))
                 self._check_conflicts(int(desk_id), int(user_id), start, end)
@@ -230,16 +241,16 @@ class BookingService:
                 desk_id=int(desk_id),
                 planed_at=start,
                 duration=duration,
-                created_at=dt.datetime.now(),
+                created_at=office_now(),
                 is_cancelled=False,
             )
             self.booking_repository.session.add(booking)
             self.booking_repository.flush()
             self._attach_to_user(int(user_id), int(booking.id))
-            created.append(BookingDTO.from_booking(booking))
+            created.append(booking)
             day += dt.timedelta(days=1)
         self.booking_repository.commit()
-        return created, skipped
+        return [BookingDTO.from_booking(item) for item in self.booking_repository.get_bookings_by_ids([item.id for item in created])], skipped
 
 
     def cancel_booking(
@@ -254,13 +265,16 @@ class BookingService:
             raise NotFoundError("Бронь не найдена")
         if not admin and user_id is not None and int(booking.user_id) != int(user_id):
             raise ForbiddenError("Можно отменить только собственную бронь")
+        reason = (reason or "").strip()
         if admin and not reason:
             raise ValidationError("Укажите причину отмены брони")
 
-        cancelled_at = dt.datetime.now()
+        cancelled_at = office_now()
         booking.is_cancelled = True
         booking.cancelled_at = cancelled_at
         booking.cancellation_reason = (reason or "").strip() or None
+        if admin:
+            self.booking_repository.session.add(Notification(user_id=booking.user_id, text=f"Бронь №{booking.id} отменена администратором: {booking.cancellation_reason}"))
         self._detach_from_user(int(booking.user_id), int(booking.id))
         self.booking_repository.update_booking(booking)
         return cancelled_at
@@ -273,8 +287,9 @@ class BookingService:
         return True
 
     def describe(self, booking: BookingDTO) -> str:
+        place = f"рабочее место №{booking.desk_number}" if booking.desk_number is not None else "рабочее место"
         return (
-            f"Бронь №{booking.id}: рабочее место {booking.desk_id}, "
+            f"Бронь №{booking.id}: {place}, "
             f"{booking.planed_at:%d.%m.%Y %H:%M}, {format_duration(booking.duration)}"
         )
 

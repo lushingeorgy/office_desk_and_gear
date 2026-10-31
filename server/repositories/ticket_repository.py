@@ -4,6 +4,7 @@ import datetime as dt
 from typing import List, Optional
 
 from sqlalchemy import func, select
+from sqlalchemy.orm import joinedload
 
 from server.models.equipment import Equipment
 from server.models.tickets import Ticket
@@ -12,15 +13,16 @@ from server.repositories.base_repository import BaseRepository
 
 class TicketRepository(BaseRepository):
     def get_ticket_by_id(self, ticket_id: Optional[int]) -> Optional[Ticket]:
-        return self.get(Ticket, ticket_id)
+        return self.session.get(Ticket, ticket_id, options=[joinedload(Ticket.equipment)])
 
     def get_all_tickets(self) -> List[Ticket]:
-        stmt = select(Ticket).order_by(Ticket.created_at.desc(), Ticket.id.desc())
+        stmt = select(Ticket).options(joinedload(Ticket.equipment)).order_by(Ticket.created_at.desc(), Ticket.id.desc())
         return list(self.session.execute(stmt).scalars().all())
 
     def get_tickets_by_user_id(self, user_id: int) -> List[Ticket]:
         stmt = (
             select(Ticket)
+            .options(joinedload(Ticket.equipment))
             .where(Ticket.author_id == int(user_id))
             .order_by(Ticket.created_at.desc(), Ticket.id.desc())
         )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import secrets
+from enum import Enum
 from typing import Any, Optional
 
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +12,11 @@ from server.core.security import hash_password, verify_password, hash_token_valu
 from server.dto.user_dto import UserDTO
 from server.models.users import User, ROLES, ROLE_EMPLOYEE
 from server.models.auth import utc_now
+from server.models.auth import EmailVerificationCode
+from server.core.config import settings
+from server.core.exceptions import ForbiddenError, ConflictError
+from server.services.mail_service import send_code
+from sqlalchemy import delete
 from server.repositories.user_repository import UserRepository
 from server.repositories.auth_repository import AuthRepository
 
@@ -70,11 +76,12 @@ class UserService:
             raise BadRequestError("Укажите ФИО сотрудника")
 
         if self.user_repository.get_user_by_email(email) is not None:
-            raise BadRequestError("Пользователь с такой почтой уже зарегистрирован")
+            raise ConflictError("Пользователь с такой почтой уже зарегистрирован")
 
-        role = (getattr(payload, "role", None) or DEFAULT_ROLE).strip().lower()
-        if role not in ROLES:
-            raise ValidationError("Выберите допустимую роль пользователя")
+        role = getattr(payload, "role", DEFAULT_ROLE)
+        role = role.value if isinstance(role, Enum) else role
+        if not isinstance(role, str) or role not in ROLES:
+            raise ValidationError("Недопустимая роль пользователя")
         user = User(
             full_name=full_name,
             job_title=(getattr(payload, "job_title", "") or "").strip(),
@@ -82,13 +89,17 @@ class UserService:
             password_hash=hash_password(password),
             role=role,
             created_at=dt.date.today(),
-            current_bookings=[],
+            is_verified=not settings.REQUIRE_EMAIL_VERIFICATION,
         )
         try:
-            user = self.user_repository.create_user(user)
+            self.user_repository.session.add(user)
+            self.user_repository.flush()
+            if not user.is_verified:
+                self._send_verification(user)
+            self.user_repository.commit()
         except IntegrityError as error:
             self.user_repository.rollback()
-            raise BadRequestError("Пользователь с такой почтой уже зарегистрирован") from error
+            raise ConflictError("Пользователь с такой почтой уже зарегистрирован") from error
         return UserDTO.from_user(user)
 
 
@@ -104,6 +115,8 @@ class UserService:
         user = self.user_repository.get_user_by_email(_norm_email(email))
         if user is None or not verify_password(password or "", user.password_hash):
             raise UnauthorizedError("Неверный адрес почты или пароль")
+        if not user.is_verified:
+            raise ForbiddenError("Подтвердите электронную почту кодом из письма")
         return user
 
 
@@ -115,6 +128,13 @@ class UserService:
         full_name = getattr(payload, "full_name", None)
         email = getattr(payload, "email", None)
         job_title = getattr(payload, "job_title", None)
+        for field in ("phone", "avatar_url"):
+            value = getattr(payload, field, None)
+            if value is not None:
+                if field == "avatar_url":
+                    from server.repositories.activity_repository import ActivityRepository
+                    ActivityRepository(self.user_repository.session).validate_photo(value, user_id)
+                setattr(user, field, value.strip() or None if field == "avatar_url" else value.strip())
         if job_title is not None:
             user.job_title = job_title.strip()
 
@@ -130,6 +150,9 @@ class UserService:
                 if self.user_repository.get_user_by_email(new_email) is not None:
                     raise BadRequestError("Эта почта уже используется другим сотрудником")
                 user.email = new_email
+                if settings.REQUIRE_EMAIL_VERIFICATION:
+                    user.is_verified = False
+                    self._send_verification(user)
 
         try:
             user = self.user_repository.update_user(user)
@@ -156,13 +179,34 @@ class UserService:
         normalized = _validate_email(_norm_email(email))
         user = self.user_repository.get_user_by_email(normalized)
         if user is None:
-            raise BadRequestError("Пользователь с такой почтой не найден")
+            return ""  # Do not reveal whether an address has an account.
         code = f"{secrets.randbelow(10 ** 6):06d}"
+        send_code(normalized, code, "Восстановление пароля")
         self.auth_repository.save_reset_code(
             user.id, hash_token_value(code), utc_now() + dt.timedelta(minutes=30)
         )
-        print(f"[UC-03] код сброса пароля для {normalized}: {code}", flush=True)
         return code
+
+    def _send_verification(self, user: User):
+        code = f"{secrets.randbelow(10 ** 6):06d}"
+        send_code(user.email, code, "Подтверждение электронной почты")
+        self.user_repository.session.merge(EmailVerificationCode(user_id=user.id, code_hash=hash_token_value(code), expires_at=utc_now() + dt.timedelta(minutes=30)))
+
+    def resend_verification(self, email: str):
+        user = self.user_repository.get_user_by_email(_norm_email(email))
+        if user is not None and not user.is_verified:
+            self._send_verification(user)
+            self.user_repository.commit()
+
+    def verify_email(self, email: str, code: str):
+        user = self.user_repository.get_user_by_email(_norm_email(email))
+        if user is None:
+            raise ValidationError("Неверный или просроченный код подтверждения")
+        result = self.user_repository.session.execute(delete(EmailVerificationCode).where(EmailVerificationCode.user_id == user.id, EmailVerificationCode.code_hash == hash_token_value(code.strip()), EmailVerificationCode.expires_at > utc_now()))
+        if result.rowcount != 1:
+            raise ValidationError("Неверный или просроченный код подтверждения")
+        user.is_verified = True
+        self.user_repository.commit()
 
     def confirm_reset(self, email: str, code: str, new_password: str) -> UserDTO:
         normalized = _validate_email(_norm_email(email))

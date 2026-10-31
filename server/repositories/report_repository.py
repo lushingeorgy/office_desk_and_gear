@@ -37,15 +37,14 @@ class ReportRepository(BaseRepository):
         return int(self.session.execute(select(func.count()).select_from(Desk)).scalar_one())
 
     def sum_booked_seconds(self, start: dt.datetime, end: dt.datetime) -> int:
-        stmt = select(Booking.duration).where(
+        stmt = select(Booking).where(
             Booking.is_cancelled.is_(False),
-            Booking.planed_at >= start,
             Booking.planed_at < end,
+            Booking.planed_at + Booking.duration > start,
         )
         total = 0
-        for duration in self.session.scalars(stmt):
-            duration = duration or dt.timedelta(0)
-            total += int(duration.total_seconds())
+        for booking in self.session.scalars(stmt):
+            total += int((min(booking.ends_at, end) - max(booking.planed_at, start)).total_seconds())
         return total
 
     def count_bookings(self, start: dt.datetime, end: dt.datetime) -> int:

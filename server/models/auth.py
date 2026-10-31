@@ -24,3 +24,10 @@ class PasswordResetCode(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     code_hash: Mapped[str] = mapped_column(String(64))
     expires_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)
+
+
+class EmailVerificationCode(Base):
+    __tablename__ = "email_verification_codes"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime, index=True)

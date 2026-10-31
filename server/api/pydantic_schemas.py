@@ -4,7 +4,18 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, List, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AfterValidator, BaseModel, ConfigDict, Field, model_validator
+import re
+
+
+def validate_email(value: str) -> str:
+    value = value.strip().lower()
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+        raise ValueError("Укажите корректный адрес электронной почты")
+    return value
+
+
+EmailAddress = Annotated[str, Field(min_length=3, max_length=255), AfterValidator(validate_email)]
 
 from server.dto.booking_dto import BookingDTO
 from server.dto.desk_dto import DeskDTO
@@ -45,21 +56,34 @@ __all__ = [
 ]
 
 
+class UserRole(str, Enum):
+    employee = "employee"
+    office_manager = "office_manager"
+    it_admin = "it_admin"
+
+
 class UserCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     full_name: str = Field(min_length=1, max_length=255)
     job_title: str = Field(default="", max_length=255)
-    email: str = Field(min_length=3, max_length=255)
+    email: EmailAddress
     password: str = Field(min_length=6, max_length=1024)
-    role: Optional[str] = None
+    role: UserRole = UserRole.employee
+    confirm_password: str = Field(min_length=6, max_length=1024)
+
+    @model_validator(mode="after")
+    def passwords_match(self):
+        if self.password != self.confirm_password:
+            raise ValueError("Пароли не совпадают")
+        return self
 
 
 class LoginRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    email: str
-    password: str
+    email: EmailAddress
+    password: str = Field(min_length=1, max_length=1024)
 
 
 class Token(BaseModel):
@@ -67,6 +91,7 @@ class Token(BaseModel):
 
     access_token: str
     token_type: str = "bearer"
+    expires_at: Optional[datetime] = None
 
 
 class MessageResponse(BaseModel):
@@ -78,23 +103,25 @@ class MessageResponse(BaseModel):
 class PasswordResetRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    email: str
+    email: EmailAddress
 
 
 class PasswordResetConfirm(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    email: str
-    code: str
-    new_password: str
+    email: EmailAddress
+    code: str = Field(pattern="^[0-9]{6}$")
+    new_password: str = Field(min_length=6, max_length=1024)
 
 
 class UserProfileUpdate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    full_name: Optional[str] = None
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     job_title: Optional[str] = Field(default=None, max_length=255)
-    email: Optional[str] = None
+    email: Optional[EmailAddress] = None
+    phone: Optional[str] = Field(default=None, max_length=40)
+    avatar_url: Optional[str] = Field(default=None, max_length=1024)
 
 
 class UserResponse(UserDTO):
@@ -106,9 +133,9 @@ class DeskCreate(BaseModel):
 
     floor: Optional[int] = None
     section: Optional[int] = None
-    number: int
+    number: int = Field(gt=0)
     is_free: bool = True
-    sockets: Optional[int] = None
+    sockets: Optional[int] = Field(default=None, ge=0)
     features: List[int] = Field(default_factory=list)
 
 
@@ -117,9 +144,9 @@ class DeskUpdate(BaseModel):
 
     floor: Optional[int] = None
     section: Optional[int] = None
-    number: Optional[int] = None
+    number: Optional[int] = Field(default=None, gt=0)
     is_free: Optional[bool] = None
-    sockets: Optional[int] = None
+    sockets: Optional[int] = Field(default=None, ge=0)
     features: Optional[List[int]] = None
 
 
@@ -163,7 +190,7 @@ class BookingResponse(BookingDTO):
 class BookingCancelRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    reason: str
+    reason: str = Field(min_length=1, max_length=512)
 
 
 class EquipmentCreate(BaseModel):
@@ -171,8 +198,10 @@ class EquipmentCreate(BaseModel):
 
     desk_id: Optional[int] = None
     assigned_user_id: Optional[int] = None
-    type: str
-    socket_serial: Optional[str] = None
+    type: str = Field(min_length=1, max_length=128)
+    model: str = Field(default="", max_length=128)
+    inventory_number: Optional[str] = Field(default=None, max_length=128)
+    socket_serial: Optional[str] = Field(default=None, max_length=128)
     socket_needed: bool = False
     status: Optional[str] = None
 
@@ -195,12 +224,40 @@ class TicketCreate(BaseModel):
         validation_alias=AliasChoices("equipment_id", "epuipment_id"),
         serialization_alias="equipment_id",
     )
-    description: str
+    description: str = Field(min_length=1, max_length=10000)
     photo_url: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("photo_url", "photho_url"),
         serialization_alias="photo_url",
+        max_length=1024,
     )
+
+
+class EmailVerify(BaseModel):
+    email: EmailAddress
+    code: str = Field(pattern="^[0-9]{6}$")
+
+
+class RoleUpdate(BaseModel):
+    role: str = Field(pattern="^(employee|office_manager|it_admin)$")
+
+
+class TicketCommentCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class UploadCreate(BaseModel):
+    image_base64: str = Field(min_length=4, max_length=7_000_000)
+    filename: str = Field(default="photo", max_length=255)
+
+
+class EquipmentUpdate(BaseModel):
+    type: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    model: Optional[str] = Field(default=None, max_length=128)
+    inventory_number: Optional[str] = Field(default=None, max_length=128)
+    socket_serial: Optional[str] = Field(default=None, max_length=128)
+    socket_needed: Optional[bool] = None
+    status: Optional[str] = Field(default=None, pattern="^(in_stock|assigned|in_repair|written_off)$")
 
 
 class TicketStatus(str, Enum):

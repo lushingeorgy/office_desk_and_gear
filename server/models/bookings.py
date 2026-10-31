@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Interval, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, Interval, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from server.models import Base
@@ -11,6 +11,7 @@ from server.models import Base
 
 class Booking(Base):
     __tablename__ = "bookings"
+    __table_args__ = (CheckConstraint("duration > interval '0 seconds' AND duration <= interval '24 hours'", name="ck_bookings_duration"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(

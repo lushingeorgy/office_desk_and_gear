@@ -12,6 +12,7 @@ class TicketDTO(BaseModel):
     id: int
     author_id: int
     equipment_id: int
+    equipment_type: Optional[str] = None
     description: str
     photo_url: Optional[str] = None
     status: str = "new"
@@ -24,6 +25,7 @@ class TicketDTO(BaseModel):
             id=int(ticket.id),
             author_id=int(ticket.author_id),
             equipment_id=int(ticket.equipment_id),
+            equipment_type=ticket.__dict__["equipment"].type if ticket.__dict__.get("equipment") else None,
             description=ticket.description or "",
             photo_url=ticket.photo_url,
             status=ticket.status or "new",
