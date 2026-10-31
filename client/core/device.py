@@ -98,7 +98,10 @@ class DeviceTools:
         intent.setType(mime)
         intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        Activity.startActivity(Intent.createChooser(intent, "Поделиться файлом"))
+        # PyJNIus 1.7's overload resolver rejects Python str for CharSequence,
+        # even though its argument converter supports that conversion.
+        chooser_title = autoclass("java.lang.String")("Поделиться файлом")
+        Activity.startActivity(Intent.createChooser(intent, chooser_title))
         return str(path)
 
     def print_image(self, path, on_ready=None, on_error=None):
