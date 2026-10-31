@@ -105,12 +105,15 @@ jobs:
           restore-keys: ${{ steps.native-fingerprint.outputs.legacy-prefix }}
       - run: buildozer -v android debug
       - name: Sign and verify the actual APK with the persisted development key
+        shell: bash
         run: |
+          set -euo pipefail
           sdk_tools="$HOME/.buildozer/android/platform/android-sdk/build-tools"
           tools_version=$(find "$sdk_tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)
           signer="$sdk_tools/$tools_version/apksigner"
           aligner="$sdk_tools/$tools_version/zipalign"
-          test -x "$signer" && test -x "$aligner"
+          test -x "$signer"
+          test -x "$aligner"
           mapfile -t apks < <(find bin -maxdepth 1 -type f -name '*.apk')
           test "${#apks[@]}" -eq 1
           apk="${apks[0]}"
@@ -132,7 +135,8 @@ jobs:
           # Deduplicate the same certificate reported for multiple schemes.
           actual=$(sed -nE 's/^.*certificate SHA-256 digest: ([[:xdigit:]]{64})$/\1/p' tests/artifacts/android-signing/verified.txt | tr 'A-F' 'a-f' | sort -u)
           signer_count=$(sed -n 's/^Number of signers: //p' tests/artifacts/android-signing/verified.txt)
-          test "$signer_count" -eq 1 && test "$actual" = "$expected"
+          test "$signer_count" -eq 1
+          test "$actual" = "$expected"
           mv "$signed" "$apk"
           echo "Verified development APK certificate SHA-256: $actual"
       - name: Preserve native build cache
