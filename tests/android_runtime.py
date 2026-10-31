@@ -301,7 +301,7 @@ class NativeSmoke:
         self.fill("Рабочая почта", EMAIL)
         self.fill("Пароль", PASSWORD)
         self.click_primary("С возвращением", EMAIL)
-        self.find("Мой профиль", timeout=60, scroll=True)
+        self.find("Мой профиль", timeout=60)
         state = self.wait_state(lambda item: bool(item.get("cache", {}).get("home")) and bool(item.get("credential")), "Login did not persist credential and the completed home response")
         credential = state.get("credential") or {}
         self.check("Android Keystore encrypted a persistent credential", credential.get("kind") == "android-keystore" and bool(credential.get("data")))
@@ -311,12 +311,15 @@ class NativeSmoke:
         user_id = state.get("user", {}).get("id")
         self.screenshot("signed-in")
         self.launch()
-        self.find("Мой профиль", timeout=60, scroll=True)
+        # This fixture's home controls fit the fixed viewport. Never queue a
+        # swipe on SDL's startup splash: Kivy can receive its release only
+        # after the home buttons appear and navigate away during restoration.
+        self.find("Мой профиль", timeout=90)
         restored = self.wait_state(lambda item: item.get("user", {}).get("id") == user_id, "Restart did not restore the account")
         self.check("Force-stop and process restart restore the same account", bool(user_id) and restored.get("user", {}).get("id") == user_id)
         self.check("Restart decrypts the same Keystore credential without a new login", restored.get("credential") == credential and self.server_sessions() == 1)
         self.screenshot("restored")
-        self.click("Выйти из аккаунта", scroll=True)
+        self.click("Выйти из аккаунта")
         self.find("С возвращением")
         cleared = self.wait_state(lambda item: all(key not in item for key in ("credential", "user", "cache")), "Logout did not clear private account state")
         self.check("Explicit logout removes credential, user and private cache", all(key not in cleared for key in ("credential", "user", "cache")))
