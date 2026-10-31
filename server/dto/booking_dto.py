@@ -35,6 +35,9 @@ class BookingDTO(BaseModel):
     id: int
     user_id: int
     desk_id: int
+    desk_number: int | None = None
+    desk_floor: int | None = None
+    desk_section: int | None = None
     planed_at: dt.datetime
     duration: str
     is_cancelled: bool = False
@@ -43,10 +46,14 @@ class BookingDTO(BaseModel):
 
     @classmethod
     def from_booking(cls, booking: Any) -> "BookingDTO":
+        desk = getattr(booking, "__dict__", {}).get("desk")
         return cls(
             id=int(booking.id),
             user_id=int(booking.user_id),
             desk_id=int(booking.desk_id),
+            desk_number=desk.number if desk is not None else None,
+            desk_floor=desk.floor if desk is not None else None,
+            desk_section=desk.section if desk is not None else None,
             planed_at=booking.planed_at,
             duration=format_duration(booking.duration),
             is_cancelled=booking.is_cancelled,

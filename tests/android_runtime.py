@@ -39,6 +39,45 @@ def normalized(value):
     return " ".join(re.findall(r"[a-zа-я0-9]+", unicodedata.normalize("NFKC", value).lower().replace("ё", "е")))
 
 
+def primary_button_bounds(picture):
+    """Locate the observed blue canvas button, without relying on its OCR."""
+    width, height = picture.size
+    mask = bytearray(width * height)
+    for index, (red, green, blue) in enumerate(picture.convert("RGB").getdata()):
+        mask[index] = (abs(red - 139) <= 45 and abs(green - 173) <= 45
+                       and abs(blue - 255) <= 45 and blue - red >= 40)
+    candidates = []
+    for start in range(len(mask)):
+        if not mask[start]:
+            continue
+        mask[start] = 0
+        pending = [start]
+        left = right = start % width
+        top = bottom = start // width
+        area = 0
+        while pending:
+            index = pending.pop()
+            x, y = index % width, index // width
+            left, right = min(left, x), max(right, x)
+            top, bottom = min(top, y), max(bottom, y)
+            area += 1
+            neighbours = []
+            if x: neighbours.append(index - 1)
+            if x + 1 < width: neighbours.append(index + 1)
+            if y: neighbours.append(index - width)
+            if y + 1 < height: neighbours.append(index + width)
+            for neighbour in neighbours:
+                if mask[neighbour]:
+                    mask[neighbour] = 0
+                    pending.append(neighbour)
+        box_width, box_height = right - left + 1, bottom - top + 1
+        if box_width >= width * .6 and 24 <= box_height <= height * .15 and area >= box_width * box_height * .55:
+            candidates.append((left, top, right, bottom))
+    if len(candidates) != 1:
+        raise AssertionError(f"Expected one observed primary canvas button, found {len(candidates)}")
+    return candidates[0]
+
+
 class NativeSmoke:
     def __init__(self, directory):
         self.directory = directory
@@ -48,6 +87,7 @@ class NativeSmoke:
         self.size = (480, 960)
         self.state_path = None
         self.last_pid = None
+        self.picture = None
 
     def logcat(self, app_only=False):
         arguments = ["logcat", "-d", "-v", "threadtime"]
@@ -59,6 +99,7 @@ class NativeSmoke:
         self.sequence += 1
         raw = adb("exec-out", "screencap", "-p", binary=True)
         picture = Image.open(io.BytesIO(raw)).convert("RGB")
+        self.picture = picture
         self.size = picture.size
         picture.save(self.directory / f"{self.sequence:03d}-{label}.png")
         gray = ImageOps.autocontrast(ImageOps.grayscale(picture))
@@ -77,6 +118,10 @@ class NativeSmoke:
             evidence.append(f"[{polarity}]")
             evidence.extend(" ".join(word[0] for word in words) for words in lines.values())
             for words in lines.values():
+                # Tesseract may emit "IT-администратор" as a single token.
+                # Its component words still refer to the same clickable label.
+                for word, x, y, width, height in words:
+                    output.extend((part, x + width // 2, y + height // 2) for part in normalized(word).split())
                 for start in range(len(words)):
                     for end in range(start + 1, len(words) + 1):
                         part = words[start:end]
@@ -120,14 +165,31 @@ class NativeSmoke:
         adb("shell", "input", "tap", str(x), str(y))
         time.sleep(.7)
 
+    def click_primary(self, page, expected_text):
+        # Only use the observed canvas bounds after the expected screen and
+        # current field value have been confirmed through the shipping UI.
+        self.find(page)
+        self.find(expected_text)
+        self.screenshot("primary-button")
+        bounds = primary_button_bounds(self.picture)
+        (self.directory / f"{self.sequence:03d}-primary-button.bounds.json").write_text(json.dumps({"page": page, "bounds": bounds}), encoding="utf-8")
+        left, top, right, bottom = bounds
+        adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
+        time.sleep(.7)
+        self.fatal_check()
+
     def fill(self, label, value):
         x, y = self.find(label)
         adb("shell", "input", "tap", str(x), str(y + 12))
-        time.sleep(.4)
+        time.sleep(.5)
         adb("shell", "input", "keyevent", "123")  # MOVE_END
         adb("shell", "input", "keyevent", *(["67"] * 128))
+        time.sleep(.5)
         # All input values here are fixed ASCII test fixtures, with no shell syntax.
         adb("shell", "input", "text", value)
+        # SDL forwards Android key events to Kivy asynchronously. Let the last
+        # characters arrive before Back dismisses the IME/field focus.
+        time.sleep(.8)
         adb("shell", "input", "keyevent", "4")
         time.sleep(.7)
 
@@ -214,18 +276,31 @@ class NativeSmoke:
         self.find("С возвращением", timeout=90)
         self.check("Actual ARM64 APK renders the KivyMD login screen", bool(adb("shell", "pidof", PACKAGE, required=False)))
         self.screenshot("cold-login")
+        self.click("Создать аккаунт")
+        self.click("Сотрудник")  # Real touch on the readonly job-title field.
+        self.find("Офис-менеджер", timeout=20)
+        self.screenshot("registration-job-menu")
+        self.click("администратор")
+        time.sleep(1)
+        selected = self.screenshot("registration-job-selected")
+        self.fatal_check()
+        texts = {item[0] for item in selected}
+        self.check("A real dropdown touch selects the IT job title and dismisses its menu", normalized("администратор") in texts and normalized("Офис-менеджер") not in texts)
+        self.check("Native registration dropdown selection keeps the same app process alive", adb("shell", "pidof", PACKAGE, required=False).split() == [self.last_pid])
+        self.click("У меня уже есть аккаунт", scroll=True)
+        self.find("С возвращением")
         self.click("Настроить сервер")
         self.find("Подключение к серверу")
         # A populated Kivy field has a tiny floating hint. Locate its visible
         # current value instead; the saved API and actual server login are
         # independently asserted below.
         self.fill("http://127.0.0.1:8000/api/v1", API_URL)
-        self.click("Проверить и сохранить")
+        self.click_primary("Подключение к серверу", API_URL)
         self.find("С возвращением")
         self.check("Remote API address persisted by the shipping settings UI", self.state().get("api_url") == API_URL)
         self.fill("Рабочая почта", EMAIL)
         self.fill("Пароль", PASSWORD)
-        self.click("Войти")
+        self.click_primary("С возвращением", EMAIL)
         self.find("Мой профиль", timeout=60, scroll=True)
         state = self.wait_state(lambda item: bool(item.get("cache", {}).get("home")) and bool(item.get("credential")), "Login did not persist credential and the completed home response")
         credential = state.get("credential") or {}

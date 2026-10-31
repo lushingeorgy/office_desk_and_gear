@@ -95,6 +95,8 @@ class OfficeDeskGearApp(MDApp):
     title = "Office Desk & Gear"
 
     def build(self):
+        from client.core.graphics_compat import initialize_ripple_shader_at_creation
+        initialize_ripple_shader_at_creation()
         self.theme_cls.theme_style = "Dark"
         self.theme_cls.primary_palette = "Blue"
         Window.clearcolor = BACKGROUND
@@ -861,13 +863,23 @@ class OfficeDeskGearApp(MDApp):
             if not items:
                 self.text("Бронирований пока нет", MUTED, target=content)
             for item in sorted(items, key=lambda b: b["planed_at"], reverse=True):
-                self.action(f"Стол #{item['desk_id']} · {moment(item['planed_at'])}" + (" · отменена" if item.get("is_cancelled") else ""),
+                self.action(self._booking_place(item) + f" · {moment(item['planed_at'])}" + (" · отменена" if item.get("is_cancelled") else ""),
                             partial(self.booking_detail, item, admin), target=content)
         self.job(self.api.get_bookings if admin else self.api.get_booking_history, display,
                  cache_key="all_bookings" if admin else "my_bookings", cached=display)
 
+    @staticmethod
+    def _booking_place(booking):
+        number = booking.get("desk_number")
+        title = f"Стол №{number}" if number is not None else "Рабочее место"
+        if booking.get("desk_floor") is not None:
+            title += f" · этаж {booking['desk_floor']}"
+        if booking.get("desk_section") is not None:
+            title += f" · секция {booking['desk_section']}"
+        return title
+
     def booking_detail(self, booking, admin=False):
-        self.page_start("booking", f"Бронь №{booking['id']}", f"Стол #{booking['desk_id']} · {moment(booking['planed_at'])}")
+        self.page_start("booking", f"Бронь №{booking['id']}", self._booking_place(booking) + f" · {moment(booking['planed_at'])}")
         self.text("Длительность: " + booking["duration"] + " ч")
         if admin:
             self.text("Сотрудник #" + str(booking.get("user_id", "—")))
@@ -880,7 +892,7 @@ class OfficeDeskGearApp(MDApp):
                 self.action("Отменить от имени администратора", lambda: self._admin_cancel(booking, reason))
             else:
                 self.action("Изменить дату и длительность", lambda: self.booking_form(
-                    {"id": booking["desk_id"], "number": booking["desk_id"]}, booking=booking))
+                    {"id": booking["desk_id"], "number": booking.get("desk_number") or "—"}, booking=booking))
                 self.action("Отменить бронирование", lambda: self.confirm("Отменить бронь?", "Место станет доступно коллегам.",
                             lambda: self.mutate(lambda: self.api.cancel_booking(booking["id"]), lambda _r: self._cancelled(False))))
         self.action("К списку броней", lambda: self.bookings(admin))

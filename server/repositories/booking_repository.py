@@ -5,8 +5,10 @@ from server.core.time import office_now
 from typing import List, Optional
 
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from server.models.bookings import Booking
+from server.models.desks import Desk
 from server.repositories.base_repository import BaseRepository
 
 
@@ -16,18 +18,27 @@ def _day_bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime]:
 
 
 class BookingRepository(BaseRepository):
+    @staticmethod
+    def _display_query():
+        return select(Booking).options(
+            joinedload(Booking.desk).load_only(Desk.number, Desk.floor, Desk.section).raiseload("*")
+        ).execution_options(populate_existing=True)
+
     def get_booking_by_id(self, booking_id: Optional[int]) -> Optional[Booking]:
-        return self.get(Booking, booking_id)
+        return self.session.scalar(self._display_query().where(Booking.id == booking_id))
+
+    def get_bookings_by_ids(self, booking_ids) -> List[Booking]:
+        return list(self.session.scalars(self._display_query().where(Booking.id.in_(booking_ids)).order_by(Booking.id)))
 
     def get_active_booking_by_id(self, booking_id: Optional[int]) -> Optional[Booking]:
-        booking = self.get(Booking, booking_id)
+        booking = self.get_booking_by_id(booking_id)
         if booking is None or booking.is_cancelled:
             return None
         return booking
 
     def get_all_bookings(self) -> List[Booking]:
         stmt = (
-            select(Booking)
+            self._display_query()
             .where(Booking.is_cancelled.is_(False))
             .order_by(Booking.planed_at.desc(), Booking.id.desc())
         )
@@ -35,7 +46,7 @@ class BookingRepository(BaseRepository):
 
     def get_bookings_by_user_id(self, user_id: int) -> List[Booking]:
         stmt = (
-            select(Booking)
+            self._display_query()
             .where(Booking.user_id == int(user_id))
             .order_by(Booking.planed_at.desc(), Booking.id.desc())
         )
@@ -47,7 +58,7 @@ class BookingRepository(BaseRepository):
         day: Optional[dt.date] = None,
         include_past: bool = True,
     ) -> List[Booking]:
-        stmt = select(Booking).where(
+        stmt = self._display_query().where(
             Booking.desk_id == int(desk_id), Booking.is_cancelled.is_(False)
         )
         if day is not None:
@@ -107,7 +118,7 @@ class BookingRepository(BaseRepository):
     def get_active_booking(self, user_id: int, now: Optional[dt.datetime] = None) -> Optional[Booking]:
         moment = now or office_now()
         stmt = (
-            select(Booking)
+            self._display_query()
             .where(
                 Booking.user_id == int(user_id),
                 Booking.is_cancelled.is_(False),
@@ -124,7 +135,7 @@ class BookingRepository(BaseRepository):
         self, start: dt.datetime, end: dt.datetime
     ) -> List[Booking]:
         stmt = (
-            select(Booking)
+            self._display_query()
             .where(
                 Booking.is_cancelled.is_(False),
                 Booking.planed_at < end,
