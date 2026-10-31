@@ -1198,6 +1198,7 @@ class OfficeDeskGearApp(MDApp):
             self.device.share(path, mime)
             self.note("Файл готов для отправки", success=True)
         except Exception:
+            LOG.exception("System share sheet could not be opened")
             self.note("Не удалось открыть системное меню отправки", error=True)
 
     def analytics(self):
