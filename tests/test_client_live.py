@@ -271,7 +271,13 @@ def gui_main(restored=False):
             start = (dt.date.today() + dt.timedelta(days=2)).isoformat() + " 09:00"
             fs = fields({"start": "Дата и время начала", "duration": "Часов в день · 1–24"}, {"start": start, "duration": 8})
             app._booking_save(data["desk"], fs, False, None)
-        stage("create booking through UI", create_booking, lambda: expect_page("bookings"))
+        def booking_list_place():
+            expect_page("bookings")
+            assert data["desk"]["id"] != 701
+            text = "\n".join(str(getattr(widget, "text", "")) for widget in app.body.walk())
+            assert "Стол №701" in text and "этаж 7" in text, text
+            assert f"Стол #{data['desk']['id']}" not in text, text
+        stage("create booking through UI", create_booking, booking_list_place)
 
         stage("reopen the same booking interval", lambda: app.booking_form(data["desk"]))
 
@@ -304,7 +310,12 @@ def gui_main(restored=False):
         def booking_detail():
             data["booking"] = app.api.get_booking_history()[0]
             app.booking_detail(data["booking"])
-        stage("booking detail", booking_detail)
+        def booking_detail_place():
+            expect_page("booking")
+            text = "\n".join(str(getattr(widget, "text", "")) for widget in app.body.walk())
+            assert "Стол №701" in text and "этаж 7" in text and "секция 1" in text, text
+            assert f"Стол #{data['desk']['id']}" not in text, text
+        stage("booking detail", booking_detail, booking_detail_place)
         stage("bookings screenshot", lambda: snap("booking"))
         stage("booking period form", lambda: app.booking_form(data["desk"], period=True))
         stage("equipment registry", lambda: app.equipment(True))

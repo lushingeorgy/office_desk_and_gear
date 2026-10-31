@@ -95,10 +95,7 @@ class BookingService:
             )
         user_conflict = self.booking_repository.find_user_overlap(user_id, start, end, exclude_booking_id)
         if user_conflict is not None:
-            raise ConflictError(
-                "У вас уже есть бронь на это время (рабочее место №"
-                f"{user_conflict.desk_id})"
-            )
+            raise ConflictError("У вас уже есть бронь на это время")
 
     def _attach_to_user(self, user_id: int, booking_id: int) -> None:
         pass  # Foreign-key relationship is the single source of booking membership.
@@ -178,7 +175,7 @@ class BookingService:
         self.booking_repository.flush()
         self._attach_to_user(int(user_id), int(booking.id))
         self.booking_repository.commit()
-        return BookingDTO.from_booking(booking)
+        return BookingDTO.from_booking(self.booking_repository.get_booking_by_id(booking.id))
 
     def edit_booking(self, booking_id: int, payload: Any, user_id: int) -> BookingDTO:
         booking = self.booking_repository.get_booking_by_id(booking_id)
@@ -194,7 +191,7 @@ class BookingService:
         self._check_conflicts(payload.desk_id, user_id, start, start + duration, booking_id)
         booking.desk_id, booking.planed_at, booking.duration = payload.desk_id, start, duration
         self.booking_repository.commit()
-        return BookingDTO.from_booking(booking)
+        return BookingDTO.from_booking(self.booking_repository.get_booking_by_id(booking.id))
 
     def create_booking_period(self, payload: Any, user_id: int) -> tuple[list[BookingDTO], list[str]]:
         desk_id = getattr(payload, "desk_id", None)
@@ -222,7 +219,7 @@ class BookingService:
             raise ValidationError("Нельзя бронировать завершившийся период")
 
         self._lock_and_check_availability(int(desk_id), int(user_id))
-        created: list[BookingDTO] = []
+        created: list[Booking] = []
         skipped: list[str] = []
         day = first_day
         while day <= last_day:
@@ -250,10 +247,10 @@ class BookingService:
             self.booking_repository.session.add(booking)
             self.booking_repository.flush()
             self._attach_to_user(int(user_id), int(booking.id))
-            created.append(BookingDTO.from_booking(booking))
+            created.append(booking)
             day += dt.timedelta(days=1)
         self.booking_repository.commit()
-        return created, skipped
+        return [BookingDTO.from_booking(item) for item in self.booking_repository.get_bookings_by_ids([item.id for item in created])], skipped
 
 
     def cancel_booking(
@@ -290,8 +287,9 @@ class BookingService:
         return True
 
     def describe(self, booking: BookingDTO) -> str:
+        place = f"рабочее место №{booking.desk_number}" if booking.desk_number is not None else "рабочее место"
         return (
-            f"Бронь №{booking.id}: рабочее место {booking.desk_id}, "
+            f"Бронь №{booking.id}: {place}, "
             f"{booking.planed_at:%d.%m.%Y %H:%M}, {format_duration(booking.duration)}"
         )
 

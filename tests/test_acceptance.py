@@ -125,12 +125,13 @@ class PostgreSQLAcceptance(unittest.TestCase):
             cls.tokens[role] = token
 
     @classmethod
-    def register_user(cls, label: str, *, role=None):
+    def register_user(cls, label: str, *, role=None, client=None):
+        client = client if client is not None else cls.client
         email = f"{label}-{uuid.uuid4().hex}@company.ru"
         payload = {"full_name": "Acceptance " + label, "email": email, "password": PASSWORD, "confirm_password": PASSWORD}
         if role is not None:
             payload["role"] = role
-        response = cls.client.post(PREFIX + "/auth/register", json=payload)
+        response = client.post(PREFIX + "/auth/register", json=payload)
         if response.status_code != 201:
             raise AssertionError(f"Registration expected 201, got {response.status_code}: {response.text[:500]}")
         user = response.json()
@@ -142,10 +143,10 @@ class PostgreSQLAcceptance(unittest.TestCase):
         if not matching:
             raise AssertionError("Registration did not produce a verification message in the test outbox")
         code = max(matching, key=lambda item: item[0])[1]["code"]
-        response = cls.client.post(PREFIX + "/auth/verify-email", json={"email": email, "code": code})
+        response = client.post(PREFIX + "/auth/verify-email", json={"email": email, "code": code})
         if response.status_code != 200:
             raise AssertionError(f"Email verification failed: {response.status_code}: {response.text[:500]}")
-        response = cls.client.post(PREFIX + "/auth/login", json={"email": email, "password": PASSWORD})
+        response = client.post(PREFIX + "/auth/login", json={"email": email, "password": PASSWORD})
         if response.status_code != 200:
             raise AssertionError(f"Login failed: {response.status_code}: {response.text[:500]}")
         return user, response.json()["access_token"]
@@ -440,6 +441,63 @@ class PostgreSQLAcceptance(unittest.TestCase):
         notifications = self.items(self.request("GET", "/notifications"))
         self.assertTrue(any("Acceptance maintenance" in item.get("text", "") for item in notifications))
         self.request("POST", "/bookings", 201, role="other", payload=payload)
+
+    def test_09b_booking_place_display_survives_fresh_reads_and_desk_change(self):
+        from fastapi.testclient import TestClient
+        from sqlalchemy import event
+        from server.dto.booking_dto import BookingDTO
+        from server.repositories.booking_repository import BookingRepository
+
+        # Separate user and signup peer keep this fixture's bookings and
+        # authentication budget independent of the other acceptance scenarios.
+        fixture_client = TestClient(self.app, client=("booking-display", 50000))
+        try:
+            user, token = self.register_user("booking-display", client=fixture_client)
+        finally:
+            fixture_client.close()
+        desk = self.create_desk(floor=27, section=4, number=701)
+        self.assertNotEqual(desk["id"], desk["number"])
+        start = (dt.datetime.now() + dt.timedelta(days=27)).replace(hour=9, minute=0, second=0, microsecond=0)
+        booking = self.request("POST", "/bookings", 201, token=token, payload={
+            "desk_id": desk["id"], "planed_at": start.isoformat(), "duration_hours": 2})
+
+        def assert_place(item, number=701, floor=27, section=4):
+            self.assertEqual((number, floor, section), (item["desk_number"], item["desk_floor"], item["desk_section"]))
+
+        assert_place(booking)
+        for path in ("/bookings", "/bookings/history"):
+            fresh = next(item for item in self.items(self.request("GET", path, token=token)) if item["id"] == booking["id"])
+            assert_place(fresh)
+
+        period = self.request("POST", "/bookings/period", 201, token=token, payload={
+            "desk_id": desk["id"], "start_date": (start + dt.timedelta(days=1)).isoformat(),
+            "end_date": (start + dt.timedelta(days=2)).isoformat(), "daily_duration_hours": 1})
+        self.assertEqual(2, len(period))
+        for item in period:
+            assert_place(item)
+
+        statements = []
+        def counted(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+        event.listen(self.engine, "before_cursor_execute", counted)
+        try:
+            with self.SessionLocal() as session:
+                records = BookingRepository(session).get_bookings_by_user_id(user["id"])
+                displayed = [BookingDTO.from_booking(item) for item in records]
+                self.assertTrue(any(item.desk_number == 701 for item in displayed))
+                for item in records:
+                    self.assertNotIn("feature_records", item.desk.__dict__)
+                    self.assertNotIn("user", item.__dict__)
+            self.assertEqual(1, len(statements), "Booking display must use one joined query without desk collections")
+        finally:
+            event.remove(self.engine, "before_cursor_execute", counted)
+
+        other = self.create_desk(floor=28, section=5, number=702)
+        updated = self.request("PUT", f"/bookings/{booking['id']}", token=token, payload={
+            "desk_id": other["id"], "planed_at": start.isoformat(), "duration_hours": 2})
+        assert_place(updated, 702, 28, 5)
+        fresh = next(item for item in self.request("GET", "/bookings/history", token=token) if item["id"] == booking["id"])
+        assert_place(fresh, 702, 28, 5)
 
     def test_10_concurrent_booking_has_only_one_winner(self):
         from fastapi.testclient import TestClient
