@@ -58,7 +58,7 @@ class RemoteSuite(NativeSmoke):
             self.results.append({'name':name,'status':'FAIL','error':str(error),'seconds':round(time.monotonic()-start,2)})
             self.screenshot('failure')
             self.save(False)
-            optional={'photo','persistence','offline','forbid_admin','desk_views','edit_desk',
+            optional={'photo','gallery_ticket','persistence','offline','forbid_admin','desk_views','edit_desk',
                       'edit_equipment','roles','qr','analytics','delete_unused','notifications'}
             if getattr(function,'__name__','') in optional:
                 print('FAIL:',name,':',str(error),flush=True)
@@ -168,20 +168,28 @@ class RemoteSuite(NativeSmoke):
 
     def field_point(self,label):
         words=self.ready_words(); target=normalized(label)
-        for text,x,y in words:
-            if text==target: return x,y+12
         # Filled Material fields shrink their hints to 12 px. OCR sometimes
         # reads the three Cyrillic letters in ФИО as Latin DUC. In a recognized
         # form use its actual paired outline edges and documented field order.
         layouts={
+            'С возвращением':['Рабочая почта','Пароль'],
+            'Создать аккаунт':['ФИО','Должность','Рабочая почта','Пароль от 6 символов','Повторите пароль'],
+            'Подтвердить почту':['Код подтверждения'],
+            'Восстановить пароль':['Рабочая почта','Код из письма','Новый пароль от 6 символов','Повторите новый пароль'],
             'Мой профиль':['ФИО','Рабочая почта','Должность','Телефон','Фото профиля'],
+            'Рабочие места':['Поиск стола на сервере','Дата'],
+            'Фильтры столов':['Этаж','Секция','Минимум розеток','Сортировать по','Порядок'],
+            'Новое рабочее место':['Номер стола','Этаж','Секция','Число розеток','Доступность'],
             'Изменить рабочее место':['Номер стола','Этаж','Секция','Число розеток','Доступность'],
+            'Добавить оборудование':['Тип оборудования','Модель','Серийный номер','Инвентарный номер','Рабочее место','Требуется розетка','Статус'],
             'Изменить оборудование':['Тип оборудования','Модель','Серийный номер','Инвентарный номер','Требуется розетка','Статус'],
             'Бронь на день':['Дата и время начала','Часов в день'],
             'Бронь на период':['Дата и время начала','Часов в день','Конец периода'],
             'Изменить бронь':['Дата и время начала','Часов в день'],
             'Закрепление техники':['Сотрудник','Рабочее место'],
             'Сотрудники и роли':['Роль'],
+            'Сообщить о проблеме':['Тип неисправности','Опишите проблему','Фотография'],
+            'Сканировать QR-код':['Код или ID устройства'],
         }
         for title,labels in layouts.items():
             if label not in labels or not any(text==normalized(title) and y<210 for text,_,y in words): continue
@@ -196,10 +204,12 @@ class RemoteSuite(NativeSmoke):
                 right=next((b for b in edges if b[0]>self.size[0]*.85 and abs(b[1]-y)<=2 and abs(b[3]-h)<=2),None)
                 if right: boxes.append((x,y,right[0]+right[2],y+h))
             index=labels.index(label)
-            assert len(boxes)>index,'Observed field outlines missing: '+label
+            if len(boxes)<=index: break
             left,top,right,bottom=boxes[index]
             (self.directory/f'{self.sequence:03d}-field.bounds.json').write_text(json.dumps({'form':title,'field':label,'bounds':boxes[index]}))
             return (left+right)//2,(top+bottom)//2
+        for text,x,y in words:
+            if text==target and y>=220: return x,y+12
         x,y=self.find(label,scroll=True)
         return x,y+12
 
@@ -211,6 +221,7 @@ class RemoteSuite(NativeSmoke):
         self.home()
         self.press('Выйти из аккаунта')
         self.wait_state(lambda s:not s.get('credential') and not s.get('user'),'Logout did not erase credential')
+        assert not self.state().get('cache'), 'Logout retained private cache'
         self.role=None
 
     def register(self,role):
@@ -423,6 +434,48 @@ class RemoteSuite(NativeSmoke):
             events=api.ticket_events(self.ids['ticket'])
         assert item['status']=='closed' and any(self.tag in x['text'] for x in events)
 
+    def gallery_ticket(self):
+        # Stage an image file for Android's real system picker. No app-private
+        # files or state are changed; selection and upload use the shipping UI.
+        with self.api('it_admin') as api: data=api.admin_generate_qr(self.ids['equipment'])
+        fixture=self.directory/'gallery-fixture.png'
+        fixture.write_bytes(base64.b64decode(data['qr_code_base64'].split(',')[-1]))
+        adb('push',str(fixture.resolve()),'/sdcard/Download/ODG-gallery-fixture.png')
+        adb('shell','am','broadcast','-a','android.intent.action.MEDIA_SCANNER_SCAN_FILE',
+            '-d','file:///sdcard/Download/ODG-gallery-fixture.png',required=False)
+        self.click('Техника');self.click(str(self.ids['equipment'])+' Laptop',scroll=True)
+        self.click('Сообщить о проблеме',scroll=True)
+        self.fill('Опишите проблему','QAGallery'+self.tag)
+        self.press('Выбрать фото из галереи');time.sleep(2)
+        picked=False
+        for _ in range(4):
+            adb('shell','uiautomator','dump','/sdcard/qa-picker.xml')
+            tree=ET.fromstring(adb('shell','cat','/sdcard/qa-picker.xml'))
+            nodes=list(tree.iter('node'))
+            candidates=[node for node in nodes if node.get('text')=='ODG-gallery-fixture.png']
+            if not candidates:
+                candidates=[node for node in nodes if node.get('resource-id','').endswith(('/icon_thumb','/thumbnail')) and node.get('bounds')]
+            if candidates:
+                node=candidates[0];x1,y1,x2,y2=map(int,re.findall(r'\d+',node.get('bounds','')))
+                adb('shell','input','tap',(x1+x2)//2,(y1+y2)//2);picked=True;break
+            downloads=next((node for node in nodes if node.get('text')=='Downloads'),None)
+            if downloads:
+                x1,y1,x2,y2=map(int,re.findall(r'\d+',downloads.get('bounds','')))
+                adb('shell','input','tap',(x1+x2)//2,(y1+y2)//2)
+            else: adb('shell','input','keyevent','82')
+            time.sleep(1)
+        assert picked,'No image was visible in Android system picker'
+        self.find('selected-photo',timeout=30,scroll=True)
+        self.primary();self.find('Заявка отправлена в IT-отдел')
+        with self.api() as api:
+            item=next(x for x in api.get_my_tickets() if 'QAGallery'+self.tag in x['description'])
+            assert item['photo_url']
+            target=self.directory/'gallery-upload.jpg'
+            api.download_private(item['photo_url'],target)
+        self.ids['photo_ticket']=item['id']
+        self.click('Посмотреть фото',scroll=True);self.find('Фотография')
+        self.screenshot('ticket-private-photo');self.native_back()
+
     def notifications(self):
         self.home(); self.press('Уведомления')
         self.find('Обращение',scroll=True)
@@ -434,7 +487,7 @@ class RemoteSuite(NativeSmoke):
         self.press('Сделать фото'); time.sleep(2); self.allow_permission()
         self.find('Фотография',timeout=25)
         time.sleep(3); self.screenshot('emulated-camera')
-        self.click('Сделать снимок')
+        self.primary()
         self.primary(); self.find('Профиль сохранён')
         with self.api() as api:
             user=api.get_me()
@@ -495,8 +548,15 @@ class RemoteSuite(NativeSmoke):
         self.desk_search(self.number)
         self.press('Редактировать стол')
         self.fill('Число розеток','6')
+        self.select('Доступность','Временно недоступен')
         self.primary(); self.find('Рабочее место сохранено')
-        with self.api() as api: assert api.get_desk(self.ids['desk'])['sockets']==6
+        with self.api() as api:
+            item=api.get_desk(self.ids['desk'])
+            assert item['sockets']==6 and not item['is_operational']
+        self.press('Редактировать стол')
+        self.select('Доступность','В эксплуатации')
+        self.primary(); self.find('Рабочее место сохранено')
+        with self.api() as api: assert api.get_desk(self.ids['desk'])['is_operational']
 
     def edit_equipment(self):
         self.open_equipment(); self.press('Изменить устройство')
@@ -618,6 +678,7 @@ def main():
         suite.stage('Create three-day booking period',lambda:suite.book(True))
         suite.stage('Employee cancels own period booking',suite.own_cancel)
         suite.stage('Create IT ticket',suite.ticket)
+        suite.stage('Android gallery file upload and ticket photo viewer',suite.gallery_ticket)
         suite.logout(); suite.login('office_manager')
         suite.stage('Office manager cancellation with reason',suite.admin_cancel)
         suite.logout(); suite.login('it_admin')
