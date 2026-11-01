@@ -36,7 +36,7 @@ def adb(*arguments: str, binary=False, required=True):
 
 
 def normalized(value):
-    return " ".join(re.findall(r"[a-zа-я0-9]+", unicodedata.normalize("NFKC", value).lower().replace("ё", "е")))
+    return " ".join(re.findall(r"[a-zа-я0-9]+", unicodedata.normalize("NFKC", value.replace("№", " ")).lower().replace("ё", "е")))
 
 
 def primary_button_bounds(picture):
@@ -129,8 +129,50 @@ class NativeSmoke:
                         x, y = min(item[1] for item in part), min(item[2] for item in part)
                         right, bottom = max(item[1] + item[3] for item in part), max(item[2] + item[4] for item in part)
                         output.append((text, (x + right) // 2, (y + bottom) // 2))
+        # Canvas buttons and floating Material hints need their own segmentation;
+        # full-screen sparse OCR can discard dark text inside the blue action.
+        import cv2
+        import numpy as np
+        frame=np.asarray(picture)
+        blue=cv2.inRange(frame,np.array([94,128,210]),np.array([184,218,255]))
+        blue[(frame[:,:,2].astype('int16')-frame[:,:,0])<40]=0
+        count,_,stats,_=cv2.connectedComponentsWithStats(blue)
+        regions=[]
+        for x,y,width,height,area in stats[1:]:
+            if width>=picture.width*.6 and 24<=height<=picture.height*.15 and area>=width*height*.55:
+                regions.append(('button',(x+8,y+4,x+width-8,y+height-4)))
+        border=cv2.inRange(frame,np.array([35,43,58]),np.array([43,51,66]))
+        contours=cv2.findContours(border,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[0]
+        for contour in contours:
+            x,y,width,height=cv2.boundingRect(contour)
+            if 16<=x<=32 and width<=4 and 30<=height<=110:
+                regions.append(('hint',(x+8,max(0,y-21),picture.width-x-8,y+2)))
+        for kind,bounds in regions:
+            bounds=tuple(map(int,bounds))
+            crop=ImageOps.grayscale(picture.crop(bounds))
+            if kind=='hint':
+                crop=crop.point(lambda value: 0 if value>70 else 255)
+                if sum(1 for value in crop.getdata() if value==0)<8: continue
+            else: crop=ImageOps.autocontrast(crop)
+            crop=crop.resize((crop.width*3,crop.height*3),Image.Resampling.LANCZOS)
+            label=pytesseract.image_to_string(crop,lang='rus+eng',config='--psm 7').strip()
+            evidence.append('['+kind+'] '+label)
+            parts=normalized(label).split()
+            x1,y1,x2,y2=bounds
+            for start in range(len(parts)):
+                for end in range(start+1,len(parts)+1):
+                    output.append((' '.join(parts[start:end]),(x1+x2)//2,(y1+y2)//2))
         # These are fixture-screen labels, never private state or credentials.
         (self.directory / f"{self.sequence:03d}-{label}.ocr.txt").write_text("\n".join(evidence), encoding="utf-8")
+        # Android's own Pixel Launcher can ANR during a fresh emulator boot.
+        # Dismiss only this observed system-app dialog, never an APK ANR.
+        if any(text == normalized("Pixel Launcher isn't responding") for text,_,_ in output):
+            close = next(((x,y) for text,x,y in output if text in {"clos","close"}),None)
+            if close:
+                (self.directory / f"{self.sequence:03d}-external-launcher-dialog.json").write_text(json.dumps({"app":"Pixel Launcher","action":"Close app","point":close}))
+                adb("shell","input","tap",*close)
+                time.sleep(1)
+                return []
         return output
 
     def fatal_check(self):

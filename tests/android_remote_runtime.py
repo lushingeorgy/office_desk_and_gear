@@ -191,6 +191,8 @@ class RemoteSuite(NativeSmoke):
             'Сообщить о проблеме':['Тип неисправности','Опишите проблему','Фотография'],
             'Сканировать QR-код':['Код или ID устройства'],
         }
+        if self.ids.get('ticket'):
+            layouts['Обращение '+str(self.ids['ticket'])]=['Новый статус','Комментарий IT-специалиста']
         for title,labels in layouts.items():
             if label not in labels or not any(text==normalized(title) and y<210 for text,_,y in words): continue
             import cv2,numpy as np
