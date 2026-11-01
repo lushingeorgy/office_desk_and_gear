@@ -115,6 +115,15 @@ class NativeSmoke:
                 if normalized(text):
                     key = (data["block_num"][index], data["par_num"][index], data["line_num"][index])
                     lines.setdefault(key, []).append((text, data["left"][index] // 2, data["top"][index] // 2, data["width"][index] // 2, data["height"][index] // 2))
+            # Sparse OCR sometimes puts the ID and equipment name in different
+            # blocks even though they share a visible baseline.
+            geometric=[]
+            for word in sorted((word for row in lines.values() for word in row),key=lambda word:word[2]+word[4]/2):
+                center=word[2]+word[4]/2
+                row=next((row for row in geometric if abs((row[0][2]+row[0][4]/2)-center)<=7),None)
+                if row is None: geometric.append([word])
+                else: row.append(word)
+            for index,row in enumerate(geometric): lines[('geometric',index,0)]=sorted(row,key=lambda word:word[1])
             evidence.append(f"[{polarity}]")
             evidence.extend(" ".join(word[0] for word in words) for words in lines.values())
             for words in lines.values():

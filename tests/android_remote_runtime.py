@@ -80,13 +80,18 @@ class RemoteSuite(NativeSmoke):
 
     def top(self):
         w,h=self.size
-        for _ in range(3): adb('shell','input','swipe',20,int(h*.3),20,int(h*.84),'220')
-        time.sleep(.4)
+        for _ in range(10): adb('shell','input','swipe',20,int(h*.3),20,int(h*.84),'220')
+        self.stop_scroll()
 
     def bottom(self):
         w,h=self.size
-        for _ in range(3): adb('shell','input','swipe',20,int(h*.82),20,int(h*.28),'220')
-        time.sleep(.6)
+        for _ in range(10): adb('shell','input','swipe',20,int(h*.82),20,int(h*.28),'220')
+        self.stop_scroll()
+
+    def stop_scroll(self):
+        _,h=self.size
+        adb('shell','input','swipe',20,int(h*.5),20,int(h*.5),'200')
+        time.sleep(.5)
 
     def find(self,phrase,*,timeout=28,scroll=False):
         target=normalized(phrase)
@@ -101,7 +106,8 @@ class RemoteSuite(NativeSmoke):
                 w,h=self.size
                 a,b=(.65,.42) if self.menu else (.8,.3)
                 x=w//2 if self.menu else 20
-                adb('shell','input','swipe',x,int(h*a),x,int(h*b),'350')
+                adb('shell','input','swipe',x,int(h*a),x,int(h*b),'800' if self.menu else '350')
+                if not self.menu: self.stop_scroll()
                 swipes+=1
             time.sleep(.35)
         raise AssertionError('UI text did not appear: '+phrase)
@@ -201,14 +207,19 @@ class RemoteSuite(NativeSmoke):
             if label not in labels or not any(text==normalized(title) and y<210 for text,_,y in words): continue
             import cv2,numpy as np
             frame=np.asarray(self.picture)
-            mask=cv2.inRange(frame,np.array([35,43,58]),np.array([43,51,66]))
+            mask=cv2.inRange(frame,np.array([19,27,42]),np.array([59,67,82]))
+            mask|=cv2.inRange(frame,np.array([94,128,210]),np.array([184,218,255]))
             contours=cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[0]
             edges=[cv2.boundingRect(c) for c in contours]
             lefts=sorted((b for b in edges if 16<=b[0]<=32 and b[2]<=4 and 30<=b[3]<=110),key=lambda b:b[1])
             boxes=[]
+            for x,y,w,h in edges:
+                if w>self.size[0]*.6 and 44<=h<=130 and cv2.countNonZero(mask[y:y+h,x:x+w])<w*h*.3:
+                    boxes.append((x,y,x+w,y+h))
             for x,y,w,h in lefts:
                 right=next((b for b in edges if b[0]>self.size[0]*.85 and abs(b[1]-y)<=2 and abs(b[3]-h)<=2),None)
-                if right: boxes.append((x,y,right[0]+right[2],y+h))
+                if right and not any(abs((a[1]+a[3])/2-(y+h/2))<8 for a in boxes): boxes.append((x,y,right[0]+right[2],y+h))
+            boxes.sort(key=lambda box:box[1])
             index=labels.index(label)
             if len(boxes)<=index: break
             left,top,right,bottom=boxes[index]
@@ -258,6 +269,50 @@ class RemoteSuite(NativeSmoke):
             assert user['role']==role and user['is_verified']
             actor['id']=user['id'];self.actors[role]=actor
         finally: api.close()
+
+    def home_map_context(self):
+        # Ongoing booking is API fixture setup; all navigation and cancellation
+        # below are actual UI operations in the shipping APK.
+        start=dt.datetime.now().replace(second=0,microsecond=0)-dt.timedelta(minutes=5)
+        end=start+dt.timedelta(hours=2)
+        with self.api('employee') as api:
+            desks=api.get_desks(start_at=start.isoformat(),end_at=end.isoformat(),limit=200)
+            desk=next(x for x in desks if x['number']<900000 and x['is_free'] and x['is_operational'])
+            booking=api.create_booking(desk['id'],start.isoformat(),2)
+            features=api.get_desk_features()
+        self.ids.update(home_booking=booking['id'],home_desk=desk['id'],home_desk_number=desk['number'])
+        cancelled=False
+        try:
+            self.login('employee');self.find('Ваше место сегодня',scroll=True)
+            self.click('Столы');self.fill('Дата',self.day.isoformat())
+            self.top();self.primary();self.ready_words()
+            self.bottom();self.click('Следующие 20',scroll=True)
+            self.find('Записи 21',scroll=True)
+            self.home();self.press('Показать на плане')
+            self.find('Стол '+str(desk['number']),scroll=True)
+            self.top();self.find(start.date().isoformat())
+            self.find('Записи 1',scroll=True)
+            self.find('Доступность за '+start.strftime('%d.%m %H:%M'),scroll=True)
+            self.screenshot('home-map-after-page-two')
+            self.top();self.click('Параметры фильтра и сортировки',scroll=True)
+            excluded=next(x for x in features if x['id'] not in desk['features'])
+            x,y=self.find(excluded['name'],scroll=True)
+            adb('shell','input','tap',36,y);time.sleep(.5)
+            self.primary();self.find('Столы не найдены',scroll=True)
+            self.home();self.press('Показать на плане')
+            self.find('Стол '+str(desk['number']),scroll=True)
+            self.find('Записи 1',scroll=True)
+            self.screenshot('home-map-clears-incompatible-feature')
+            self.home();self.click('Открыть бронь',scroll=True)
+            self.find('Бронь '+str(booking['id']))
+            self.press('Отменить бронирование');self.primary()
+            self.find('Мои бронирования')
+            with self.api('employee') as api:
+                assert next(x for x in api.get_booking_history() if x['id']==booking['id'])['is_cancelled']
+            cancelled=True
+        finally:
+            if not cancelled:
+                with self.api('employee') as api: api.cancel_booking(booking['id'])
 
     def login(self,role):
         actor=self.actors[role]
@@ -654,7 +709,7 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--apk',type=Path,required=True)
     parser.add_argument('--output',type=Path,default=Path('tests/artifacts/android-remote-runtime'))
-    parser.add_argument('--scope',choices=('full','operations'),default='full')
+    parser.add_argument('--scope',choices=('full','operations','home-map'),default='full')
     args=parser.parse_args()
     suite=RemoteSuite(args.output)
     suite.scope=args.scope
@@ -669,6 +724,12 @@ def main():
         adb('shell','wm','size','480x960'); adb('shell','wm','density','160')
         adb('logcat','-c')
         suite.launch(); suite.find('С возвращением',timeout=90)
+        if args.scope=='home-map':
+            suite.fixture_actor('employee')
+            suite.stage('Current desk map resets page date and incompatible features',suite.home_map_context)
+            suite.stage('Home-map fixture logout clears session and cache',suite.logout)
+            suite.save(True)
+            return
         for role in ('employee','office_manager','it_admin'):
             if args.scope=='operations':
                 suite.fixture_actor(role)
@@ -711,6 +772,8 @@ def main():
         suite.stage('Read server notifications',suite.notifications)
         suite.stage('Final logout removes session and cache',suite.logout)
         suite.stage('Password reset and verification screens',suite.reset_screen)
+        suite.stage('Current desk map resets page date and incompatible features',suite.home_map_context)
+        suite.stage('Home-map fixture logout clears session and cache',suite.logout)
         passed=all(result['status']=='PASS' for result in suite.results)
         suite.save(passed)
         if not passed: raise AssertionError('One or more independent native checks failed; see result.json')

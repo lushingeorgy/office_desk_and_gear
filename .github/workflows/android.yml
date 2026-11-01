@@ -237,6 +237,7 @@ jobs:
     timeout-minutes: 75
     env:
       ODG_REMOTE_ACCEPTANCE: '1'
+      ODG_REMOTE_SCOPE: ${{ contains(github.event.pull_request.labels.*.name, 'run-home-map-regression') && 'home-map' || 'full' }}
       TZ: Europe/Moscow
     steps:
       - uses: actions/checkout@v4
@@ -276,7 +277,7 @@ jobs:
           disable-animations: true
           enable-hw-keyboard: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back emulated
-          script: python tests/android_remote_runtime.py --apk $(find runtime-apk -name '*.apk' -print -quit)
+          script: python tests/android_remote_runtime.py --scope "$ODG_REMOTE_SCOPE" --apk $(find runtime-apk -name '*.apk' -print -quit)
       - name: Save remote native acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4

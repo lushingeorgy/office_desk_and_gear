@@ -12,6 +12,7 @@ from pathlib import Path
 
 from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.effects.scroll import ScrollEffect
 from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp, sp
 from kivy.uix.anchorlayout import AnchorLayout
@@ -135,7 +136,7 @@ class OfficeDeskGearApp(MDApp):
         self.status = label("", 44, 12, MUTED)
         self.status.bind(texture_size=lambda w, size: setattr(w, "height", max(dp(42), min(dp(100), size[1] + dp(12)))))
         self.shell.add_widget(self.status)
-        self.scroll = MDScrollView(do_scroll_x=False, bar_width=dp(2))
+        self.scroll = MDScrollView(do_scroll_x=False, bar_width=dp(2), effect_cls=ScrollEffect, always_overscroll=False)
         self.anchor = AnchorLayout(anchor_y="top", padding=(dp(8), dp(12)), size_hint_y=None)
         self.body = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(14), size_hint_x=None)
         self.anchor.add_widget(self.body)
@@ -176,6 +177,11 @@ class OfficeDeskGearApp(MDApp):
         self.status.text_color = ERROR if error else SUCCESS if success else MUTED
 
     def _cleanup_page(self):
+        effect = getattr(getattr(self, "scroll", None), "effect_y", None)
+        if effect is not None:
+            lower, upper = sorted((effect.min, effect.max))
+            effect.reset(max(lower, min(upper, effect.value)))
+            effect.cancel()
         for event in self._events:
             event.cancel()
         self._events.clear()
@@ -554,10 +560,14 @@ class OfficeDeskGearApp(MDApp):
 
     def _home_map(self, booking, desk):
         self.map_mode = True
-        self.filters["search"] = ""
-        self.filters["floor"] = str(desk.get("floor") or "")
-        self.filters["section"] = str(desk.get("section") or "")
-        self.desks()
+        start = dt.datetime.fromisoformat(booking["planed_at"])
+        hours, minutes, seconds = map(int, booking["duration"].split(":"))
+        end = start + dt.timedelta(hours=hours, minutes=minutes, seconds=seconds)
+        self.filters.update(search=str(desk.get("number") or ""), date=start.date().isoformat(),
+                            floor=str(desk.get("floor") or ""), section=str(desk.get("section") or ""),
+                            sockets="", features="", sort="number", order="asc")
+        self.desk_offset = 0
+        self.desks(interval=(start, end))
 
     def logout(self):
         def clear():
