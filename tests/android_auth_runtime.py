@@ -40,14 +40,14 @@ class AuthSuite(RemoteSuite):
             'kind':'QA APK and isolated PostgreSQL API with email verification enabled',
             'checks':self.results},ensure_ascii=False,indent=2),encoding='utf-8')
 
-    def code(self):
+    def code(self,purpose='Подтверждение электронной почты'):
         from server.core.config import settings
         end=time.monotonic()+15
         while time.monotonic()<end:
             paths=sorted((settings.DATA_DIR/'outbox').glob('*.json'),key=lambda p:p.stat().st_mtime,reverse=True)
             for path in paths:
                 value=json.loads(path.read_text())
-                if value.get('email')==self.email: return value['code']
+                if value.get('email')==self.email and value.get('purpose')==purpose: return value['code']
             time.sleep(.3)
         raise AssertionError('Isolated outbox message missing')
 
@@ -77,9 +77,9 @@ class AuthSuite(RemoteSuite):
         self.click('Забыли пароль?')
         self.fill('Рабочая почта',self.email)
         self.top(); self.click('Получить код',scroll=True)
-        self.find('Код отправлен')
+        self.find('восстановления')
         self.sensitive=True
-        self.fill('Код из письма',self.code())
+        self.fill('Код из письма',self.code('Восстановление пароля'))
         self.password='Changed-'+secrets.token_hex(10)
         self.fill('Новый пароль от 6 символов',self.password)
         self.fill('Повторите новый пароль',self.password)

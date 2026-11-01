@@ -58,6 +58,12 @@ class RemoteSuite(NativeSmoke):
             self.results.append({'name':name,'status':'FAIL','error':str(error),'seconds':round(time.monotonic()-start,2)})
             self.screenshot('failure')
             self.save(False)
+            optional={'photo','persistence','offline','forbid_admin','desk_views','edit_desk',
+                      'edit_equipment','roles','qr','analytics','delete_unused','notifications'}
+            if getattr(function,'__name__','') in optional:
+                print('FAIL:',name,':',str(error),flush=True)
+                self.launch(); self.find('Мой профиль',timeout=90,scroll=True)
+                return False
             raise
         self.save(False)
 
@@ -85,7 +91,7 @@ class RemoteSuite(NativeSmoke):
         swipes=0
         while time.monotonic()<end:
             for text,x,y in self.screenshot('screen'):
-                if ' '+target+' ' in ' '+text+' ': return x,y
+                if self.matches(text,target): return x,y
             self.fatal_check()
             if scroll and swipes<12:
                 w,h=self.size
@@ -95,6 +101,15 @@ class RemoteSuite(NativeSmoke):
                 swipes+=1
             time.sleep(.35)
         raise AssertionError('UI text did not appear: '+phrase)
+
+    @staticmethod
+    def matches(text,target):
+        if ' '+target+' ' in ' '+text+' ': return True
+        if target.startswith('qa') and target.isascii():
+            # OCR confuses l/1 and O/0 in the randomized fixture names.
+            table=str.maketrans({'0':'o','1':'l','5':'s','8':'b'})
+            return target.replace(' ','').translate(table) in text.replace(' ','').translate(table)
+        return False
 
     def ready_words(self):
         end=time.monotonic()+35
@@ -111,15 +126,14 @@ class RemoteSuite(NativeSmoke):
         self.find(phrase,scroll=scroll)
         target=normalized(phrase)
         for text,x,y in self.ready_words():
-            if ' '+target+' ' in ' '+text+' ':
+            if self.matches(text,target):
                 adb('shell','input','tap',x,y);time.sleep(.8);return
         raise AssertionError('UI target moved before tap: '+phrase)
 
     def fill(self,label,value):
         self.top()
-        self.ready_words()
-        x,y=self.find(label,scroll=True)
-        adb('shell','input','tap',x,y+12)
+        x,y=self.field_point(label)
+        adb('shell','input','tap',x,y)
         time.sleep(.25)
         adb('shell','input','keyevent','123')
         adb('shell','input','keyevent',*(['67']*128))
@@ -146,11 +160,48 @@ class RemoteSuite(NativeSmoke):
 
     def select(self,label,option):
         self.top()
-        x,y=self.find(label,scroll=True)
-        adb('shell','input','tap',x,y+12); time.sleep(.5)
+        x,y=self.field_point(label)
+        adb('shell','input','tap',x,y); time.sleep(.5)
         self.menu=True
         try: self.click(option,scroll=True)
         finally: self.menu=False
+
+    def field_point(self,label):
+        words=self.ready_words(); target=normalized(label)
+        for text,x,y in words:
+            if text==target: return x,y+12
+        # Filled Material fields shrink their hints to 12 px. OCR sometimes
+        # reads the three Cyrillic letters in ФИО as Latin DUC. In a recognized
+        # form use its actual paired outline edges and documented field order.
+        layouts={
+            'Мой профиль':['ФИО','Рабочая почта','Должность','Телефон','Фото профиля'],
+            'Изменить рабочее место':['Номер стола','Этаж','Секция','Число розеток','Доступность'],
+            'Изменить оборудование':['Тип оборудования','Модель','Серийный номер','Инвентарный номер','Требуется розетка','Статус'],
+            'Бронь на день':['Дата и время начала','Часов в день'],
+            'Бронь на период':['Дата и время начала','Часов в день','Конец периода'],
+            'Изменить бронь':['Дата и время начала','Часов в день'],
+            'Закрепление техники':['Сотрудник','Рабочее место'],
+            'Сотрудники и роли':['Роль'],
+        }
+        for title,labels in layouts.items():
+            if label not in labels or not any(text==normalized(title) and y<210 for text,_,y in words): continue
+            import cv2,numpy as np
+            frame=np.asarray(self.picture)
+            mask=cv2.inRange(frame,np.array([35,43,58]),np.array([43,51,66]))
+            contours=cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[0]
+            edges=[cv2.boundingRect(c) for c in contours]
+            lefts=sorted((b for b in edges if 16<=b[0]<=32 and b[2]<=4 and 30<=b[3]<=110),key=lambda b:b[1])
+            boxes=[]
+            for x,y,w,h in lefts:
+                right=next((b for b in edges if b[0]>self.size[0]*.85 and abs(b[1]-y)<=2 and abs(b[3]-h)<=2),None)
+                if right: boxes.append((x,y,right[0]+right[2],y+h))
+            index=labels.index(label)
+            assert len(boxes)>index,'Observed field outlines missing: '+label
+            left,top,right,bottom=boxes[index]
+            (self.directory/f'{self.sequence:03d}-field.bounds.json').write_text(json.dumps({'form':title,'field':label,'bounds':boxes[index]}))
+            return (left+right)//2,(top+bottom)//2
+        x,y=self.find(label,scroll=True)
+        return x,y+12
 
     def home(self):
         self.click('Главная')
@@ -168,7 +219,7 @@ class RemoteSuite(NativeSmoke):
         self.click('Создать аккаунт')
         self.find('ФИО')
         self.fill('ФИО',name)
-        self.select('Должность',{'employee':'Сотрудник','office_manager':'Офис-менеджер','it_admin':'IT-администратор'}[role])
+        self.select('Должность',{'employee':'Сотрудник','office_manager':'Офис-менеджер','it_admin':'администратор'}[role])
         self.fill('Рабочая почта',actor['email'])
         self.fill('Пароль от 6 символов',actor['password'])
         self.fill('Повторите пароль',actor['password'])
@@ -503,7 +554,7 @@ class RemoteSuite(NativeSmoke):
         self.find('Восстановить пароль')
         self.fill('Рабочая почта',self.actors['employee']['email'])
         self.top(); self.click('Получить код',scroll=True)
-        self.find('Код отправлен')
+        self.find('восстановления')
         self.press('Ко входу')
         self.fill('Рабочая почта',self.actors['employee']['email'])
         self.click('Подтвердить рабочую почту')
@@ -577,7 +628,9 @@ def main():
         suite.stage('Read server notifications',suite.notifications)
         suite.stage('Final logout removes session and cache',suite.logout)
         suite.stage('Password reset and verification screens',suite.reset_screen)
-        suite.save(True)
+        passed=all(result['status']=='PASS' for result in suite.results)
+        suite.save(passed)
+        if not passed: raise AssertionError('One or more independent native checks failed; see result.json')
         print('Remote native checks passed:',len(suite.results))
     except Exception as error:
         suite.save(False)

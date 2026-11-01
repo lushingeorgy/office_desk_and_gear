@@ -160,14 +160,16 @@ class BookingRepository(BaseRepository):
 
     def occupied_desk_ids(self, now: Optional[dt.datetime] = None) -> set[int]:
         moment = now or office_now()
-        bookings = self.session.execute(select(Booking).where(
+        return set(self.session.scalars(select(Booking.desk_id).distinct().where(
             Booking.is_cancelled.is_(False), Booking.planed_at <= moment,
-        )).scalars().all()
-        return {int(b.desk_id) for b in bookings if b.ends_at > moment}
+            Booking.planed_at + Booking.duration > moment,
+        )))
 
     def occupied_between(self, start: dt.datetime, end: dt.datetime) -> set[int]:
-        bookings = self.session.scalars(select(Booking).where(Booking.is_cancelled.is_(False), Booking.planed_at < end))
-        return {b.desk_id for b in bookings if b.ends_at > start}
+        return set(self.session.scalars(select(Booking.desk_id).distinct().where(
+            Booking.is_cancelled.is_(False), Booking.planed_at < end,
+            Booking.planed_at + Booking.duration > start,
+        )))
 
     def create_booking(self, booking: Booking) -> Booking:
         return self.add(booking)

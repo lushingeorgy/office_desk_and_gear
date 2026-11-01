@@ -13,6 +13,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   apk:
+    if: github.event_name != 'pull_request' || !contains(github.event.pull_request.labels.*.name, 'reuse-remote-test-apk')
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
@@ -323,7 +324,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y tesseract-ocr tesseract-ocr-rus
-          python -m pip install -r requirements-dev.txt pytesseract
+          python -m pip install -r requirements-dev.txt pytesseract opencv-python-headless
       - name: Start isolated API and PostgreSQL fixtures
         run: |
           mkdir -p tests/artifacts/android-runtime
