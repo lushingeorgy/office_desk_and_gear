@@ -71,12 +71,12 @@ class RemoteSuite(NativeSmoke):
 
     def top(self):
         w,h=self.size
-        for _ in range(2): adb('shell','input','swipe',w//2,int(h*.3),w//2,int(h*.84),'140')
+        for _ in range(3): adb('shell','input','swipe',20,int(h*.3),20,int(h*.84),'220')
         time.sleep(.4)
 
     def bottom(self):
         w,h=self.size
-        for _ in range(3): adb('shell','input','swipe',w//2,int(h*.82),w//2,int(h*.28),'120')
+        for _ in range(3): adb('shell','input','swipe',20,int(h*.82),20,int(h*.28),'220')
         time.sleep(.6)
 
     def find(self,phrase,*,timeout=28,scroll=False):
@@ -90,13 +90,34 @@ class RemoteSuite(NativeSmoke):
             if scroll and swipes<12:
                 w,h=self.size
                 a,b=(.65,.42) if self.menu else (.8,.3)
-                adb('shell','input','swipe',w//2,int(h*a),w//2,int(h*b),'350')
+                x=w//2 if self.menu else 20
+                adb('shell','input','swipe',x,int(h*a),x,int(h*b),'350')
                 swipes+=1
             time.sleep(.35)
         raise AssertionError('UI text did not appear: '+phrase)
 
+    def ready_words(self):
+        end=time.monotonic()+35
+        busy=('сохраненные данные обновляем','загрузка','сохраняем','обновляем сессию',
+              'входим в аккаунт','создаем профиль','дождитесь завершения текущего запроса')
+        while time.monotonic()<end:
+            words=self.screenshot('ready')
+            if not any(any(text.startswith(prefix) for prefix in busy) for text,_,_ in words): return words
+            self.fatal_check();time.sleep(.7)
+        raise AssertionError('UI request did not finish before interaction')
+
+    def click(self,phrase,*,scroll=False):
+        self.ready_words()
+        self.find(phrase,scroll=scroll)
+        target=normalized(phrase)
+        for text,x,y in self.ready_words():
+            if ' '+target+' ' in ' '+text+' ':
+                adb('shell','input','tap',x,y);time.sleep(.8);return
+        raise AssertionError('UI target moved before tap: '+phrase)
+
     def fill(self,label,value):
         self.top()
+        self.ready_words()
         x,y=self.find(label,scroll=True)
         adb('shell','input','tap',x,y+12)
         time.sleep(.25)
@@ -109,10 +130,11 @@ class RemoteSuite(NativeSmoke):
         time.sleep(.4)
 
     def press(self,label):
-        self.bottom()
+        self.top()
         self.click(label,scroll=True)
 
     def primary(self):
+        self.ready_words()
         self.screenshot('primary')
         try: bounds=native.primary_button_bounds(self.picture)
         except AssertionError:

@@ -8,7 +8,6 @@ on:
       - 'buildozer.spec'
       - 'p4a-recipes/**'
       - '.github/workflows/android.yml'
-      - 'tests/android*runtime.py'
 concurrency:
   group: android-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
