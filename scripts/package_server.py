@@ -12,6 +12,8 @@ def main():
         "Dockerfile", ".dockerignore", "requirements-server.txt", "alembic.ini", "run_app.py",
         "deploy/compose.shared.yaml", "deploy/nginx.shared.conf.example", "deploy/Caddyfile.shared.snippet",
         "deploy/.env.server.example", "deploy/README.md",
+        "deploy/backup-database.sh", "deploy/office-desk-gear-backup.service", "deploy/office-desk-gear-backup.timer",
+        "deploy/BACKUPS.md",
     )]
     for directory in ("server", "migrations"):
         files.extend(path for path in (ROOT / directory).rglob("*.py")

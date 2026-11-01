@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Office Desk & Gear database backup at 04:15 Moscow time
+
+[Timer]
+OnCalendar=*-*-* 04:15:00 Europe/Moscow
+Persistent=true
+AccuracySec=1min
+Unit=office-desk-gear-backup.service
+
+[Install]
+WantedBy=timers.target

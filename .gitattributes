@@ -8,3 +8,6 @@
 *.spec text eol=lf
 *.mako text eol=lf
 *.ps1 text eol=crlf
+*.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
