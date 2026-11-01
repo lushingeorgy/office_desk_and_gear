@@ -22,5 +22,5 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/backups/office-desk-gear
+ReadWritePaths=/opt/projects/office_desk_gear/backups
 RestrictAddressFamilies=AF_UNIX

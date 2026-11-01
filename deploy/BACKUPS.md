@@ -6,10 +6,16 @@
 04:15 МСК. `Persistent=true` запускает пропущенную задачу после включения сервера.
 Работа компьютера пользователя и Codex не требуется. Таймер `maskarad` не изменялся.
 
-Копии находятся в `/var/backups/office-desk-gear/`. Сохраняются **14 последних
+Копии находятся в `/opt/projects/office_desk_gear/backups/`. Сохраняются **14 последних
 успешных копий**, включая ручные запуски. Каждый каталог содержит `database.dump`
 (PostgreSQL custom), `database.toc`, `SHA256SUMS`, `manifest.json`. Каталоги имеют
 права 0700, файлы 0600, владелец root.
+
+По запросу пользователя каталог перенесён внутрь проекта из
+`/var/backups/office-desk-gear` с проверкой хешей существующих файлов.
+`backups/` исключён из Git и контекста Docker; серверный архив также собирается
+по списку файлов и не включает этот каталог. При обновлении или переносе проекта
+каталог с копиями нужно сохранять вместе с постоянными данными.
 
 `backup-database.sh` проверяет принадлежность контейнера проекту, делает
 `pg_dump` средствами той же PostgreSQL 18, проверяет TOC и SHA-256 и публикует
@@ -35,7 +41,7 @@ sha256sum --check SHA256SUMS
 `/opt/projects/office_desk_gear/deploy/`:
 
 ```sh
-install -d -m 0700 /var/backups/office-desk-gear
+install -d -m 0700 /opt/projects/office_desk_gear/backups
 chmod 0750 /opt/projects/office_desk_gear/deploy/backup-database.sh
 install -m 0644 /opt/projects/office_desk_gear/deploy/office-desk-gear-backup.service /etc/systemd/system/
 install -m 0644 /opt/projects/office_desk_gear/deploy/office-desk-gear-backup.timer /etc/systemd/system/
@@ -57,7 +63,7 @@ API ещё ожидает SMTP и начальный запуск. Провер�
 сохранение посторонних файлов и симлинка, сохранение хороших копий и очистка
 частичного dump при ошибке, блокировка одновременного запуска. Настоящие копии
 не изменялись этими тестами. Санитизированный серверный результат:
-`/var/backups/office-desk-gear/verification.json`; локальные логи —
+`/opt/projects/office_desk_gear/backups/verification.json`; локальные логи —
 `tests/artifacts/server_backup_install_latest.log` и `server_backup_verify_latest.log`.
 
 Это копии **БД на том же сервере**. Файлы вложений, `.env.server`, SMTP/JWT-секреты

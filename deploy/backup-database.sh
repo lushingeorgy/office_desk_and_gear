@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 
-readonly BACKUP_DIR=/var/backups/office-desk-gear
+readonly BACKUP_DIR=/opt/projects/office_desk_gear/backups
 readonly STATE_DIR=/run/office-desk-gear-backup
 readonly DB_CONTAINER=office-desk-gear-db-1
 
@@ -40,7 +40,7 @@ from pathlib import Path
 import re, shutil, sys, uuid
 
 temporary=Path(sys.argv[1])
-root=Path('/var/backups/office-desk-gear')
+root=Path('/opt/projects/office_desk_gear/backups')
 assert root.resolve() == root and temporary.parent == root and temporary.name.startswith('.incomplete.')
 stamp=datetime.datetime.now(datetime.UTC)
 with (temporary/'database.dump').open('rb') as stream:
