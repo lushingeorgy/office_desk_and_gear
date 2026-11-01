@@ -155,9 +155,9 @@ class NativeSmoke:
                 if sum(1 for value in crop.getdata() if value==0)<8: continue
             else: crop=ImageOps.autocontrast(crop)
             crop=crop.resize((crop.width*3,crop.height*3),Image.Resampling.LANCZOS)
-            label=pytesseract.image_to_string(crop,lang='rus+eng',config='--psm 7').strip()
-            evidence.append('['+kind+'] '+label)
-            parts=normalized(label).split()
+            region_text=pytesseract.image_to_string(crop,lang='rus+eng',config='--psm 7').strip()
+            evidence.append('['+kind+'] '+region_text)
+            parts=normalized(region_text).split()
             x1,y1,x2,y2=bounds
             for start in range(len(parts)):
                 for end in range(start+1,len(parts)+1):

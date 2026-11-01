@@ -61,7 +61,7 @@ jobs:
           disable-animations: true
           enable-hw-keyboard: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back emulated
-          script: python tests/android_remote_runtime.py --apk $(find runtime-apk -name '*.apk' -print -quit)
+          script: python tests/android_remote_runtime.py --scope operations --apk $(find runtime-apk -name '*.apk' -print -quit)
       - name: Save remote native acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4

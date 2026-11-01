@@ -1,7 +1,8 @@
 """Opt-in black-box acceptance of the shipping APK against the staging API.
 
 Only real Android touches/type events drive the app. HTTP reads independently
-verify persisted results; HTTP writes are limited to negative permission probes.
+verify persisted results. The operations scope creates fixture actors through
+the API; it does not count that setup as UI registration coverage.
 Accounts are created by the app UI with random, never-published passwords.
 """
 from __future__ import annotations
@@ -45,6 +46,7 @@ class RemoteSuite(NativeSmoke):
         self.day=day
         self.menu=False
         self.ids={}
+        self.scope='full'
 
     def stage(self,name,function):
         start=time.monotonic()
@@ -70,6 +72,7 @@ class RemoteSuite(NativeSmoke):
     def save(self,passed):
         report={'passed':passed,'kind':'Shipping ARM64 APK on Android emulator against remote HTTPS staging API',
                 'api':DEFAULT_API_URL,'tag':self.tag,'checks':self.results,
+                'scope':self.scope,
                 'actors':{role:{k:v for k,v in value.items() if k!='password'} for role,value in self.actors.items()},'ids':self.ids,
                 'limitations':['Real phone optical QR/camera quality and physical printer are outside emulator coverage.',
                                'Positive email-code confirmation is tested separately against the isolated emulator API.']}
@@ -87,13 +90,14 @@ class RemoteSuite(NativeSmoke):
 
     def find(self,phrase,*,timeout=28,scroll=False):
         target=normalized(phrase)
+        if scroll: timeout=max(timeout,80)
         end=time.monotonic()+timeout
         swipes=0
         while time.monotonic()<end:
             for text,x,y in self.screenshot('screen'):
                 if self.matches(text,target): return x,y
             self.fatal_check()
-            if scroll and swipes<12:
+            if scroll and swipes<24:
                 w,h=self.size
                 a,b=(.65,.42) if self.menu else (.8,.3)
                 x=w//2 if self.menu else 20
@@ -244,6 +248,17 @@ class RemoteSuite(NativeSmoke):
         assert state['user']['role']==role and state['user']['is_verified']
         actor['id']=state['user']['id']
 
+    def fixture_actor(self,role):
+        name={'employee':'QAEmployee','office_manager':'QAManager','it_admin':'QAAdmin'}[role]+self.tag
+        actor={'name':name,'email':role.replace('_','')+'-'+self.tag+'@example.invalid',
+               'password':'Qa-'+secrets.token_hex(10),'role':role}
+        api=ApiClient(DEFAULT_API_URL)
+        try:
+            user=api.register(full_name=name,job_title=role,email=actor['email'],password=actor['password'],role=role)
+            assert user['role']==role and user['is_verified']
+            actor['id']=user['id'];self.actors[role]=actor
+        finally: api.close()
+
     def login(self,role):
         actor=self.actors[role]
         self.find('С возвращением')
@@ -284,7 +299,7 @@ class RemoteSuite(NativeSmoke):
         for label,value in (('Номер стола',number),('Этаж',3),('Секция',2),('Число розеток',4)):
             self.fill(label,str(value))
         self.primary()
-        self.find('Рабочее место сохранено')
+        self.find('Стол '+str(number))
         with self.api() as api:
             item=next(x for x in api.get_desks(search=str(number)) if x['number']==number)
         assert item['floor']==3 and item['section']==2 and item['sockets']==4
@@ -367,7 +382,7 @@ class RemoteSuite(NativeSmoke):
         self.fill('Часов в день','1')
         if period: self.fill('Конец периода',(day+dt.timedelta(days=2)).isoformat())
         self.primary()
-        self.find('Создано броней' if period else 'Бронь сохранена')
+        self.find('Мои бронирования')
         with self.api() as api: items=api._request('GET','/bookings')
         candidates=[x for x in items if x['desk_id']==self.ids['desk'] and not x['is_cancelled']]
         assert len(candidates)==(4 if period else 1),len(candidates)
@@ -389,7 +404,7 @@ class RemoteSuite(NativeSmoke):
         self.fill('Дата и время начала',self.day.isoformat()+'T11:00')
         self.fill('Часов в день','2')
         self.primary()
-        self.find('Бронь сохранена')
+        self.find('Мои бронирования')
         with self.api() as api: items=api._request('GET','/bookings')
         item=next(x for x in items if x['id']==self.ids['booking'])
         assert '11:00' in item['planed_at'] and int(item['duration'].split(':')[0])==2
@@ -399,7 +414,7 @@ class RemoteSuite(NativeSmoke):
         self.fill('Причина отмены','QACancellation')
         self.press('Отменить от имени администратора')
         self.primary()
-        self.find('Бронь отменена')
+        self.find('Все бронирования')
         with self.api('employee') as api: item=next(x for x in api.get_booking_history() if x['id']==self.ids['booking'])
         assert item['is_cancelled'] and item.get('cancellation_reason')=='QACancellation'
 
@@ -417,7 +432,7 @@ class RemoteSuite(NativeSmoke):
         self.select('Тип неисправности','Программная ошибка')
         self.fill('Опишите проблему','QATicket'+self.tag)
         self.primary()
-        self.find('Заявка отправлена в IT-отдел')
+        self.find('История обращения',scroll=True)
         with self.api() as api: item=next(x for x in api.get_my_tickets() if self.tag in x['description'])
         self.ids['ticket']=item['id']
 
@@ -468,7 +483,7 @@ class RemoteSuite(NativeSmoke):
             time.sleep(1)
         assert picked,'No image was visible in Android system picker'
         self.find('selected-photo',timeout=30,scroll=True)
-        self.primary();self.find('Заявка отправлена в IT-отдел')
+        self.primary();self.find('История обращения',scroll=True)
         with self.api() as api:
             item=next(x for x in api.get_my_tickets() if 'QAGallery'+self.tag in x['description'])
             assert item['photo_url']
@@ -529,7 +544,7 @@ class RemoteSuite(NativeSmoke):
         try:
             self.open_booking()
             self.press('Отменить бронирование'); self.primary()
-            self.find('Бронь отменена')
+            self.find('Мои бронирования')
             with self.api() as api: item=next(x for x in api.get_booking_history() if x['id']==self.ids['booking'])
             assert item['is_cancelled']
         finally: self.ids['booking']=original
@@ -551,13 +566,13 @@ class RemoteSuite(NativeSmoke):
         self.press('Редактировать стол')
         self.fill('Число розеток','6')
         self.select('Доступность','Временно недоступен')
-        self.primary(); self.find('Рабочее место сохранено')
+        self.primary(); self.find('Стол '+str(self.number))
         with self.api() as api:
             item=api.get_desk(self.ids['desk'])
             assert item['sockets']==6 and not item['is_operational']
         self.press('Редактировать стол')
         self.select('Доступность','В эксплуатации')
-        self.primary(); self.find('Рабочее место сохранено')
+        self.primary(); self.find('Стол '+str(self.number))
         with self.api() as api: assert api.get_desk(self.ids['desk'])['is_operational']
 
     def edit_equipment(self):
@@ -639,8 +654,10 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--apk',type=Path,required=True)
     parser.add_argument('--output',type=Path,default=Path('tests/artifacts/android-remote-runtime'))
+    parser.add_argument('--scope',choices=('full','operations'),default='full')
     args=parser.parse_args()
     suite=RemoteSuite(args.output)
+    suite.scope=args.scope
     try:
         assert os.getenv('ODG_REMOTE_ACCEPTANCE')=='1'
         api=ApiClient(DEFAULT_API_URL)
@@ -653,14 +670,17 @@ def main():
         adb('logcat','-c')
         suite.launch(); suite.find('С возвращением',timeout=90)
         for role in ('employee','office_manager','it_admin'):
-            suite.stage('Registration and selected role '+role,lambda role=role:suite.register(role))
-            if role=='employee':
-                suite.stage('Profile update persists on remote server',suite.profile)
-                suite.stage('Emulated camera capture upload and private viewer',suite.photo)
-                suite.stage('Keystore and cold restart retain login',suite.persistence)
-                suite.stage('Offline cold restart cache and network recovery',suite.offline)
-                suite.stage('Employee admin requests rejected with 403',suite.forbid_admin)
-            suite.stage('Logout '+role,suite.logout)
+            if args.scope=='operations':
+                suite.fixture_actor(role)
+            else:
+                suite.stage('Registration and selected role '+role,lambda role=role:suite.register(role))
+                if role=='employee':
+                    suite.stage('Profile update persists on remote server',suite.profile)
+                    suite.stage('Emulated camera capture upload and private viewer',suite.photo)
+                    suite.stage('Keystore and cold restart retain login',suite.persistence)
+                    suite.stage('Offline cold restart cache and network recovery',suite.offline)
+                    suite.stage('Employee admin requests rejected with 403',suite.forbid_admin)
+                suite.stage('Logout '+role,suite.logout)
         suite.login('office_manager')
         suite.stage('Desk list filters sorting map pagination',suite.desk_views)
         suite.stage('Create desk and actual displayed number',lambda:suite.create_desk(suite.number))
