@@ -8,6 +8,7 @@ on:
       - 'buildozer.spec'
       - 'p4a-recipes/**'
       - '.github/workflows/android.yml'
+      - 'tests/android*runtime.py'
 concurrency:
   group: android-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -228,6 +229,60 @@ jobs:
         with:
           name: OfficeDeskGear-apk-signing
           path: tests/artifacts/android-signing/
+          if-no-files-found: warn
+  android-remote-runtime:
+    needs: apk
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'run-remote-acceptance')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      ODG_REMOTE_ACCEPTANCE: '1'
+      TZ: Europe/Moscow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: OfficeDeskGear-android-debug
+          path: runtime-apk
+      - name: Install black-box test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-rus
+          python -m pip install requests pillow pytesseract opencv-python-headless
+      - name: Enable emulator KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # Explicit PR label opts into writes to the user's staging API. No SSH
+      # credentials are provided to Actions; actors register through the UI.
+      - name: Exercise shipping APK against the remote staging API
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 4096M
+          heap-size: 512M
+          emulator-boot-timeout: 600
+          disable-animations: true
+          enable-hw-keyboard: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back emulated
+          script: python tests/android_remote_runtime.py --apk $(find runtime-apk -name '*.apk' -print -quit)
+      - name: Save remote native acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfficeDeskGear-android-remote-runtime
+          path: tests/artifacts/android-remote-runtime/
           if-no-files-found: warn
   android-runtime:
     needs: apk
