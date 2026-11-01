@@ -400,7 +400,7 @@ class RemoteSuite(NativeSmoke):
         self.press('Отменить от имени администратора')
         self.primary()
         self.find('Бронь отменена')
-        with self.api('employee') as api: item=next(x for x in api._request('GET','/bookings') if x['id']==self.ids['booking'])
+        with self.api('employee') as api: item=next(x for x in api.get_booking_history() if x['id']==self.ids['booking'])
         assert item['is_cancelled'] and item.get('cancellation_reason')=='QACancellation'
 
     def scanner(self):
@@ -530,20 +530,20 @@ class RemoteSuite(NativeSmoke):
             self.open_booking()
             self.press('Отменить бронирование'); self.primary()
             self.find('Бронь отменена')
-            with self.api() as api: item=next(x for x in api._request('GET','/bookings') if x['id']==self.ids['booking'])
+            with self.api() as api: item=next(x for x in api.get_booking_history() if x['id']==self.ids['booking'])
             assert item['is_cancelled']
         finally: self.ids['booking']=original
 
     def roles(self):
-        # The deliberately seeded first employee is changed and restored.
+        # The list is sorted by full_name: Demo Colleague is the first row.
         self.admin(); self.click('Сотрудники и роли')
         for option,role in (('Офис-менеджер','office_manager'),('Сотрудник','employee')):
-            self.top(); self.find('Demo Employee')
+            self.top(); self.find('Demo Colleague')
             self.select('Роль',option)
             self.top(); self.click('Сохранить роль')
-            self.find('Demo Employee'); self.primary()
+            self.find('Demo Colleague'); self.primary()
             self.find('Сотрудники и роли')
-            with self.api() as api: user=next(x for x in api.admin_list_users() if x['email']=='employee@demo.invalid')
+            with self.api() as api: user=next(x for x in api.admin_list_users() if x['email']=='colleague@demo.invalid')
             assert user['role']==role
 
     def edit_desk(self):
