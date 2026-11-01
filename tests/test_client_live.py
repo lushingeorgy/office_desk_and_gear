@@ -34,11 +34,12 @@ def launcher():
     with socket.socket() as bound:
         bound.bind(("127.0.0.1", 0))
         port = bound.getsockname()[1]
-    url = f"http://127.0.0.1:{port}/api/v1"
+    url = f"http://127.0.0.1:{port}/office-desk-gear/api/v1"
     database_url = make_url(os.environ.get("DATABASE_URL", "postgresql+psycopg://postgres@127.0.0.1:5432/office_desk_gear"))
     control = create_engine(database_url.set(drivername="postgresql+psycopg"))
     environment = dict(os.environ, PGOPTIONS=f"-csearch_path={schema}", DATA_DIR=str(artifacts / "server"),
-                       DSH_API_URL=url, ODG_CLIENT_DATA=str(artifacts / "device"), KIVY_HOME=str(ROOT / "tests" / "_kivy_home"),
+                       DSH_API_URL=url, APP_ROOT_PATH="/office-desk-gear", QR_BASE_URL=url + "/equipment",
+                       ODG_CLIENT_DATA=str(artifacts / "device"), KIVY_HOME=str(ROOT / "tests" / "_kivy_home"),
                        ENVIRONMENT="test", APP_ENV="test", JWT_SECRET=secrets.token_urlsafe(48),
                        REQUIRE_EMAIL_VERIFICATION="1", MAIL_MODE="outbox", ODG_SEED="0", PYTHONIOENCODING="utf-8",
                        ODG_UI_ARTIFACTS=str(artifacts), ODG_UI_PORT=str(port))

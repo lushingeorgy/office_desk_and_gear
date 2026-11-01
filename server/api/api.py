@@ -85,7 +85,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         engine.dispose()
 
 
-app = FastAPI(title="Office Desk & Gear API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Office Desk & Gear API", version="1.0.0", lifespan=lifespan,
+              root_path=settings.APP_ROOT_PATH)
 router = APIRouter(prefix="/api/v1")
 
 

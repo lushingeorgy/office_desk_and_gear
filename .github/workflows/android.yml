@@ -112,7 +112,7 @@ jobs:
           defaults = [node.value.value for node in config.body if isinstance(node, ast.Assign)
                       and any(isinstance(target, ast.Name) and target.id == 'DEFAULT_API_URL' for target in node.targets)
                       and isinstance(node.value, ast.Constant)]
-          assert defaults == ['https://138.16.179.111/api/v1'], defaults
+          assert defaults == ['https://v3294121.hosted-by-vdsina.ru/office-desk-gear/api/v1'], defaults
           PY
       - run: buildozer -v android debug
       - name: Sign and verify the actual APK with the persisted development key
@@ -168,12 +168,17 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import io, tarfile, zipfile
+          import hashlib, io, tarfile, zipfile
           apk, = Path('bin').glob('*.apk')
           with zipfile.ZipFile(apk) as archive:
               with tarfile.open(fileobj=io.BytesIO(archive.read('assets/private.tar'))) as private:
                   config = private.extractfile('client/core/config.pyc').read()
-          assert b'https://138.16.179.111/api/v1' in config
+                  icon = private.extractfile('client/assets/icon.png').read()
+              native_icon = archive.read('res/mipmap/icon.png')
+          assert hashlib.sha256(icon).digest() == hashlib.sha256(Path('client/assets/icon.png').read_bytes()).digest()
+          # Reject the default Kivy launcher icon used by previous builds.
+          assert hashlib.sha256(native_icon).hexdigest() != '15edd4ad4ac8926999b8dbf8558d6ca9ef8ff8f7ac660a85c4c2e5e90903586f'
+          assert b'https://v3294121.hosted-by-vdsina.ru/office-desk-gear/api/v1' in config
           assert b'http://10.0.2.2:8000/api/v1' not in config
           PY
       - uses: actions/upload-artifact@v4
@@ -188,7 +193,7 @@ jobs:
           import configparser
           config = Path('client/core/config.py')
           source = config.read_text(encoding='utf-8')
-          shipping = '"https://138.16.179.111/api/v1"'
+          shipping = '"https://v3294121.hosted-by-vdsina.ru/office-desk-gear/api/v1"'
           assert source.count(shipping) == 1
           config.write_text(source.replace(shipping, '"http://10.0.2.2:8000/api/v1"'), encoding='utf-8')
           spec = configparser.ConfigParser(interpolation=None)

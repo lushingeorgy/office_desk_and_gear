@@ -16,6 +16,11 @@ class Settings:
         self.DATABASE_URL = database_url.set(drivername="postgresql+psycopg")
         self.SQL_ECHO = os.getenv("SQL_ECHO", "0").lower() in {"1", "true"}
         self.ENVIRONMENT = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development"))
+        # URL mount point belongs to the proxy, independently of the disk path.
+        self.APP_ROOT_PATH = os.getenv("APP_ROOT_PATH", "").rstrip("/")
+        if self.APP_ROOT_PATH and (not self.APP_ROOT_PATH.startswith("/") or "//" in self.APP_ROOT_PATH
+                                   or any(part in {".", ".."} for part in self.APP_ROOT_PATH.split("/"))):
+            raise ValueError("APP_ROOT_PATH must be an absolute URL path without traversal")
         self.JWT_SECRET = os.getenv("JWT_SECRET", "")
         self.DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "server" / "data")))
         self.SESSION_EXPIRE_MINUTES = int(os.getenv("SESSION_EXPIRE_MINUTES", "43200"))

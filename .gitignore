@@ -37,6 +37,7 @@ desktop.ini
 .env
 .env.*
 !.env.example
+!deploy/.env.server.example
 
 tests/artifacts/
 tests/*.log

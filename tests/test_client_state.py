@@ -244,6 +244,38 @@ class ClientStateTests(unittest.TestCase):
             with self.assertRaises(ApiError):
                 api.upload_photo(path)
 
+    def test_private_photo_keeps_shared_proxy_prefix_and_never_leaks_bearer(self):
+        calls, closed = [], []
+
+        def transport(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return SimpleNamespace(status_code=200, content=b"photo", close=lambda: closed.append(True))
+
+        base = "https://office.example.org/office-desk-gear/api/v1"
+        api = ApiClient(base, transport=transport)
+        api.set_token("private-test-bearer")
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "photo.jpg"
+            for source in ("/api/v1/uploads/own-id", "uploads/own-id",
+                           base + "/uploads/own-id", "/office-desk-gear/api/v1/uploads/own-id"):
+                api.download_private(source, output)
+                self.assertEqual(output.read_bytes(), b"photo")
+                self.assertEqual(calls[-1][1], base + "/uploads/own-id")
+                self.assertFalse(calls[-1][2]["allow_redirects"])
+                self.assertEqual(calls[-1][2]["headers"]["Authorization"], "Bearer private-test-bearer")
+            self.assertEqual(len(closed), 4)
+            for source in ("https://other.example.org/api/v1/uploads/id",
+                           "https://office.example.org/mascarad/api/v1/uploads/id",
+                           "http://office.example.org/office-desk-gear/api/v1/uploads/id",
+                           "/api/v1/uploads/../../mascarad", "/mascarad/api/v1/uploads/id",
+                           "/api/v1/uploads/%2e%2e/%2e%2e/mascarad", "/api/v1/uploads/id%2fother",
+                           "/api/v1/uploads/id\\other",
+                           base + "/uploads/id?redirect=elsewhere"):
+                with self.subTest(source=source), self.assertRaises(ApiError):
+                    api.download_private(source, output)
+            self.assertEqual(len(calls), 4, "Rejected URLs must not issue a request")
+        api.close()
+
     def test_stopped_worker_discards_callbacks_and_pending_jobs(self):
         callbacks, release, entered = [], threading.Event(), threading.Event()
         worker = BackgroundWorker(callbacks.append)

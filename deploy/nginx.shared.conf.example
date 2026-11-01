@@ -1,0 +1,15 @@
+# Include INSIDE the existing server {} after checking the assigned port/path.
+# Add only these locations; do not replace the shared server or other projects.
+location = /office-desk-gear {
+    return 308 /office-desk-gear/;
+}
+location /office-desk-gear/ {
+    client_max_body_size 8m;
+    proxy_pass http://127.0.0.1:8011/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_connect_timeout 10s;
+    proxy_read_timeout 30s;
+}

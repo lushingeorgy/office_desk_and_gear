@@ -37,13 +37,13 @@ class LauncherTests(unittest.TestCase):
         for environment in ({}, {"DSH_API_URL": ""}):
             with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True):
                 config = runpy.run_path(str(ROOT / "client" / "core" / "config.py"))
-                self.assertEqual(config["API_BASE_URL"], "https://138.16.179.111/api/v1")
+                self.assertEqual(config["API_BASE_URL"], "https://v3294121.hosted-by-vdsina.ru/office-desk-gear/api/v1")
 
     def test_isolated_test_process_can_use_local_fixture(self):
         with patch.dict(os.environ, {"DSH_API_URL": "http://127.0.0.1:8094/api/v1/"}):
             config = runpy.run_path(str(ROOT / "client" / "core" / "config.py"))
             self.assertEqual(config["API_BASE_URL"], "http://127.0.0.1:8094/api/v1")
-            self.assertEqual(config["DEFAULT_API_URL"], "https://138.16.179.111/api/v1")
+            self.assertEqual(config["DEFAULT_API_URL"], "https://v3294121.hosted-by-vdsina.ru/office-desk-gear/api/v1")
 
 
 if __name__ == "__main__":

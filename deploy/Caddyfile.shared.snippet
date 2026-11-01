@@ -1,0 +1,16 @@
+# Inside the existing HTTPS site, alongside a handle {} for its original app.
+# Keep each app's request_body policy inside its own handle.
+redir /office-desk-gear /office-desk-gear/ 308
+handle_path /office-desk-gear/* {
+    request_body {
+        max_size 8MB
+    }
+    reverse_proxy 127.0.0.1:8011 {
+        transport http {
+            max_conns_per_host 4
+            keepalive_idle_conns_per_host 2
+            keepalive 2s
+            response_header_timeout 30s
+        }
+    }
+}

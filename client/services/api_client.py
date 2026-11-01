@@ -336,15 +336,23 @@ class ApiClient:
 
     def download_private(self, photo_url, destination):
         """Fetch private media only from this API; never forward a bearer to another host."""
-        from urllib.parse import urljoin, urlparse
-        root = self.base_url.split("/api/v1")[0]
-        target = urljoin(root + "/", photo_url)
-        if urlparse(target).netloc != urlparse(root).netloc or urlparse(target).scheme != urlparse(root).scheme:
+        from urllib.parse import unquote, urljoin, urlsplit
+        # Stored upload paths are API-relative. A shared proxy may mount this
+        # project below /office-desk-gear; keep that prefix on every media GET.
+        if photo_url.startswith("/api/v1/uploads/"):
+            target = self.base_url + photo_url[len("/api/v1"):]
+        else:
+            target = urljoin(self.base_url + "/", photo_url)
+        base, parsed = urlsplit(self.base_url), urlsplit(target)
+        if (parsed.netloc != base.netloc or parsed.scheme != base.scheme
+                or not parsed.path.startswith(base.path + "/uploads/")
+                or parsed.query or parsed.fragment or unquote(parsed.path) != parsed.path
+                or "\\" in parsed.path or any(part in {".", ".."} for part in parsed.path.split("/"))):
             raise ApiError("Недопустимый адрес фотографии")
         response = None
         transport = self._acquire()
         try:
-            response = transport("GET", target, headers=self._headers(), timeout=self.timeout)
+            response = transport("GET", target, headers=self._headers(), timeout=self.timeout, allow_redirects=False)
             if response.status_code != 200:
                 raise ApiError("Не удалось загрузить фотографию", response.status_code)
             data = response.content

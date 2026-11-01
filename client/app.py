@@ -92,6 +92,7 @@ class OfficeDeskGearApp(MDApp):
     """Mobile shell. All HTTP work is serialized off the Kivy thread."""
 
     title = "Office Desk & Gear"
+    icon = str(Path(__file__).parent / "assets" / "icon.png")
 
     def build(self):
         from client.core.graphics_compat import initialize_ripple_shader_at_creation
