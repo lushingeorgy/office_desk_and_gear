@@ -373,7 +373,7 @@ class RemoteSuite(NativeSmoke):
         self.home(); self.press('Мой профиль')
         self.press('Посмотреть фото профиля')
         self.find('Фотография'); self.screenshot('private-avatar')
-        self.click('Закрыть')
+        self.native_back()
 
     def offline(self):
         import socket

@@ -304,7 +304,7 @@ jobs:
       APP_ENV: test
       ENVIRONMENT: test
       JWT_SECRET: runtime-ci-only-signing-secret-minimum-32-characters
-      REQUIRE_EMAIL_VERIFICATION: '0'
+      REQUIRE_EMAIL_VERIFICATION: '1'
       MAIL_MODE: outbox
       TZ: Europe/Moscow
     steps:
@@ -359,11 +359,15 @@ jobs:
           disable-animations: true
           enable-hw-keyboard: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back emulated
-          script: python tests/android_runtime.py --package org.officedeskgear.officedeskgearqa --apk $(find runtime-apk -name '*.apk' -print -quit)
+          script: |
+            python tests/android_runtime.py --package org.officedeskgear.officedeskgearqa --apk $(find runtime-apk -name '*.apk' -print -quit)
+            python tests/android_auth_runtime.py
       - name: Save native runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: OfficeDeskGear-android-runtime
-          path: tests/artifacts/android-runtime/
+          path: |
+            tests/artifacts/android-runtime/
+            tests/artifacts/android-auth-runtime/
           if-no-files-found: warn
