@@ -117,7 +117,7 @@ class ApiClient:
         except requests.exceptions.Timeout as error:
             raise ApiError("Сервер не отвечает. Проверьте подключение") from error
         except requests.exceptions.RequestException as error:
-            raise ApiError("Нет соединения с сервером. Проверьте сеть и адрес API") from error
+            raise ApiError("Нет соединения с сервером. Проверьте сеть и повторите попытку позже") from error
         finally:
             if response is not None and hasattr(response, "close"):
                 response.close()

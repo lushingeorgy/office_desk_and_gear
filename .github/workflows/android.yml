@@ -103,10 +103,23 @@ jobs:
             .buildozer
           key: ${{ steps.native-fingerprint.outputs.key }}
           restore-keys: ${{ steps.native-fingerprint.outputs.legacy-prefix }}
+      - name: Require the fixed shipping API before packaging
+        run: |
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          config = ast.parse(Path('client/core/config.py').read_text(encoding='utf-8'))
+          defaults = [node.value.value for node in config.body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == 'DEFAULT_API_URL' for target in node.targets)
+                      and isinstance(node.value, ast.Constant)]
+          assert defaults == ['https://138.16.179.111/api/v1'], defaults
+          PY
       - run: buildozer -v android debug
       - name: Sign and verify the actual APK with the persisted development key
         shell: bash
         run: |
+          set -euo pipefail
+          cat >"$RUNNER_TEMP/sign-development-apk.sh" <<'SH'
           set -euo pipefail
           sdk_tools="$HOME/.buildozer/android/platform/android-sdk/build-tools"
           tools_version=$(find "$sdk_tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tail -1)
@@ -114,14 +127,13 @@ jobs:
           aligner="$sdk_tools/$tools_version/zipalign"
           test -x "$signer"
           test -x "$aligner"
-          mapfile -t apks < <(find bin -maxdepth 1 -type f -name '*.apk')
-          test "${#apks[@]}" -eq 1
-          apk="${apks[0]}"
-          mkdir -p tests/artifacts/android-signing
+          apk="$1"
+          report="$2"
+          mkdir -p "$report"
           expected=$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" \
             -storepass android -alias androiddebugkey | sha256sum | awk '{print $1}')
-          printf '%s\n' "$expected" >tests/artifacts/android-signing/expected-certificate.sha256
-          "$signer" verify --verbose --print-certs "$apk" >tests/artifacts/android-signing/before.txt
+          printf '%s\n' "$expected" >"$report"/expected-certificate.sha256
+          "$signer" verify --verbose --print-certs "$apk" >"$report"/before.txt
           # Align before signing, including native libraries on 16 KiB devices.
           aligned="$RUNNER_TEMP/officedeskgear-development-aligned.apk"
           "$aligner" -f -P 16 4 "$apk" "$aligned"
@@ -130,15 +142,19 @@ jobs:
           "$signer" sign --ks "$HOME/.android/debug.keystore" --ks-key-alias androiddebugkey \
             --ks-pass pass:android --key-pass pass:android --v4-signing-enabled false \
             --out "$signed" "$aligned"
-          "$signer" verify --verbose --print-certs "$signed" | tee tests/artifacts/android-signing/verified.txt
+          "$signer" verify --verbose --print-certs "$signed" | tee "$report"/verified.txt
           # SDK 37 labels this "V3.0 Signer"; older tools use "Signer #1".
           # Deduplicate the same certificate reported for multiple schemes.
-          actual=$(sed -nE 's/^.*certificate SHA-256 digest: ([[:xdigit:]]{64})$/\1/p' tests/artifacts/android-signing/verified.txt | tr 'A-F' 'a-f' | sort -u)
-          signer_count=$(sed -n 's/^Number of signers: //p' tests/artifacts/android-signing/verified.txt)
+          actual=$(sed -nE 's/^.*certificate SHA-256 digest: ([[:xdigit:]]{64})$/\1/p' "$report"/verified.txt | tr 'A-F' 'a-f' | sort -u)
+          signer_count=$(sed -n 's/^Number of signers: //p' "$report"/verified.txt)
           test "$signer_count" -eq 1
           test "$actual" = "$expected"
           mv "$signed" "$apk"
           echo "Verified development APK certificate SHA-256: $actual"
+          SH
+          mapfile -t apks < <(find bin -maxdepth 1 -type f -name '*.apk')
+          test "${#apks[@]}" -eq 1
+          bash "$RUNNER_TEMP/sign-development-apk.sh" "${apks[0]}" tests/artifacts/android-signing/shipping
       - name: Preserve native build cache
         continue-on-error: true
         if: always() && steps.native-cache.outcome == 'success' && steps.native-cache.outputs.cache-hit != 'true'
@@ -148,10 +164,58 @@ jobs:
             ~/.buildozer
             .buildozer
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
+      - name: Verify the shipping endpoint in the packaged client
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import io, tarfile, zipfile
+          apk, = Path('bin').glob('*.apk')
+          with zipfile.ZipFile(apk) as archive:
+              with tarfile.open(fileobj=io.BytesIO(archive.read('assets/private.tar'))) as private:
+                  config = private.extractfile('client/core/config.pyc').read()
+          assert b'https://138.16.179.111/api/v1' in config
+          assert b'http://10.0.2.2:8000/api/v1' not in config
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: OfficeDeskGear-android-debug
           path: bin/*.apk
+          if-no-files-found: error
+      - name: Prepare an explicitly separate QA package for the isolated emulator API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import configparser
+          config = Path('client/core/config.py')
+          source = config.read_text(encoding='utf-8')
+          shipping = '"https://138.16.179.111/api/v1"'
+          assert source.count(shipping) == 1
+          config.write_text(source.replace(shipping, '"http://10.0.2.2:8000/api/v1"'), encoding='utf-8')
+          spec = configparser.ConfigParser(interpolation=None)
+          spec.read('buildozer.spec', encoding='utf-8')
+          assert spec.get('app', 'package.domain') == 'org.officedeskgear'
+          assert spec.get('app', 'package.name') == 'officedeskgear'
+          spec.set('app', 'package.name', 'officedeskgearqa')
+          spec.set('app', 'title', 'Office Desk Gear QA')
+          with open('buildozer.spec', 'w', encoding='utf-8') as output:
+              spec.write(output)
+          # Only the previously uploaded build output is removed, not the native cache.
+          for apk in Path('bin').glob('*.apk'):
+              apk.unlink()
+          PY
+      - name: Build the QA package using the warm native distribution
+        run: buildozer -v android debug
+      - name: Sign and verify the separately packaged QA APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t apks < <(find bin -maxdepth 1 -type f -name '*.apk')
+          test "${#apks[@]}" -eq 1
+          bash "$RUNNER_TEMP/sign-development-apk.sh" "${apks[0]}" tests/artifacts/android-signing/qa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OfficeDeskGear-android-runtime-qa
+          path: bin/*qa*.apk
           if-no-files-found: error
       - name: Save APK signing verification
         if: always()
@@ -194,7 +258,7 @@ jobs:
           java-version: '17'
       - uses: actions/download-artifact@v4
         with:
-          name: OfficeDeskGear-android-debug
+          name: OfficeDeskGear-android-runtime-qa
           path: runtime-apk
       - name: Install runtime test dependencies
         run: |
@@ -222,7 +286,7 @@ jobs:
       # build.prop advertises arm64-v8a and libndk_translation.so. The test still
       # fails on missing translation, any native crash, or any failed UI check.
       # https://developer.android.com/tools/releases/platforms
-      - name: Run the actual ARM64 APK on Android 15
+      - name: Run the isolated QA ARM64 APK on Android 15
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -235,7 +299,7 @@ jobs:
           disable-animations: true
           enable-hw-keyboard: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back emulated
-          script: python tests/android_runtime.py --apk $(find runtime-apk -name '*.apk' -print -quit)
+          script: python tests/android_runtime.py --package org.officedeskgear.officedeskgearqa --apk $(find runtime-apk -name '*.apk' -print -quit)
       - name: Save native runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v4

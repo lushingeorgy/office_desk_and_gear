@@ -122,10 +122,16 @@ class LocalState:
     def api_url(self):
         return self.data.get("api_url")
 
-    def set_api_url(self, value):
-        self.clear_account()
-        self.data["api_url"] = value
-        self.flush()
+    def bind_api_url(self, value):
+        """Scope private data to the configured API, never select it from disk."""
+        value = value.rstrip("/")
+        with self._lock:
+            previous = (self.api_url or "").rstrip("/")
+            if previous == value:
+                return
+            self.clear_account()
+            self.data["api_url"] = value
+            self.flush()
 
     def save_account(self, token, user, expires_at=None):
         with self._lock:

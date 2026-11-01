@@ -9,7 +9,6 @@ import os
 import re
 from functools import partial
 from pathlib import Path
-from urllib.parse import urlparse
 
 from kivy.clock import Clock
 from kivy.core.window import Window
@@ -106,7 +105,8 @@ class OfficeDeskGearApp(MDApp):
             Window.minimum_width, Window.minimum_height = dp(320), dp(480)
         directory = os.environ.get("ODG_CLIENT_DATA") or str(Path(self.user_data_dir) / "private")
         self.state = LocalState(directory, platform)
-        self.api = ApiClient(self.state.api_url or os.environ.get("DSH_API_URL") or API_BASE_URL)
+        self.state.bind_api_url(API_BASE_URL)
+        self.api = ApiClient(API_BASE_URL)
         self.user = None
         self.worker = BackgroundWorker(Clock.schedule_once)
         self.model = SessionViewModel(self.api, self.state, self.worker,
@@ -189,6 +189,7 @@ class OfficeDeskGearApp(MDApp):
         self.page = name
         self.body.clear_widgets()
         self.navigation.clear_widgets()
+        self.navigation.height = dp(52) if self.user else 0
         self.note("")
         self.scroll.scroll_y = 1
         self.body.add_widget(label(title, 42, 26))
@@ -198,8 +199,6 @@ class OfficeDeskGearApp(MDApp):
             for title_, method in (("Главная", self.home), ("Столы", self.desks), ("Брони", self.bookings),
                                    ("Техника", self.equipment), ("Заявки", self.tickets)):
                 self.navigation.add_widget(self.button(title_, method, compact=True))
-        else:
-            self.navigation.add_widget(self.button("Настроить сервер", self.settings, compact=True))
 
     def text(self, value, color=TEXT, target=None, size=14):
         item = label(str(value), 32, size, color)
@@ -404,7 +403,6 @@ class OfficeDeskGearApp(MDApp):
         self.action("Создать аккаунт", self.register)
         self.action("Забыли пароль?", self.reset)
         self.action("Подтвердить рабочую почту", lambda: self._verify_entry(fields["email"]))
-        self.text("Сервер: " + self.api.base_url, MUTED, size=12)
 
     def _login(self, fields):
         values = self.values(fields)
@@ -540,7 +538,6 @@ class OfficeDeskGearApp(MDApp):
         self.action("Мой профиль", self.profile)
         if self.user.get("role") in {"it_admin", "office_manager"}:
             self.action("Управление офисом", self.admin)
-        self.action("Настройки сервера", self.settings)
         self.action("Выйти из аккаунта", self.logout)
 
         def fetch():
@@ -560,45 +557,6 @@ class OfficeDeskGearApp(MDApp):
         self.filters["floor"] = str(desk.get("floor") or "")
         self.filters["section"] = str(desk.get("section") or "")
         self.desks()
-
-    def settings(self):
-        self.page_start("settings", "Подключение к серверу", "На телефоне укажите HTTPS-адрес удалённого API. Изменение сервера завершает текущий вход.")
-        field = self.field("Адрес API", self.api.base_url, required=True)
-        self.action("Проверить и сохранить", lambda: self._save_server(field), True)
-        self.action("Назад", self.home if self.user else self.login)
-        self.text("Пример: https://office.example.org/api/v1", MUTED)
-
-    def _save_server(self, field):
-        value = field.text.strip().rstrip("/")
-        parsed = urlparse(value)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-            self.note("Укажите адрес http(s) без пароля, параметров и фрагмента", error=True)
-            return
-        if parsed.path.rstrip("/") != "/api/v1":
-            value += "/api/v1" if parsed.path in {"", "/"} else ""
-        if urlparse(value).path != "/api/v1":
-            self.note("Адрес API должен оканчиваться на /api/v1", error=True)
-            return
-        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "10.0.2.2"}:
-            self.note("Для удалённого сервера используйте HTTPS", error=True)
-            return
-        candidate = ApiClient(value)
-
-        def check():
-            try:
-                return candidate.check_connection()
-            finally:
-                candidate.close()
-
-        def saved(_data):
-            self.api.close()
-            self.api.base_url = value
-            self.api.set_token(None)
-            self.state.set_api_url(value)
-            self.user = None
-            self.login()
-            self.note("Сервер подключён", success=True)
-        self.job(check, saved, "Проверяем сервер…")
 
     def logout(self):
         def clear():

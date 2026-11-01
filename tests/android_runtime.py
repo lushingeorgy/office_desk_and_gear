@@ -1,6 +1,6 @@
 """Black-box smoke of the built ARM64 APK on an Android emulator.
 
-This drives the shipping UI with adb and OCR. It never injects Python, edits
+This drives the separately packaged QA UI with adb and OCR. It never injects Python, edits
 private app state, decrypts credentials, or adds a test entry point to the APK.
 An unavailable ARM translator or failed native import is an error, not a skip.
 """
@@ -22,7 +22,7 @@ import pytesseract
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-PACKAGE = "org.officedeskgear.officedeskgear"
+PACKAGE = "org.officedeskgear.officedeskgearqa"
 EMAIL = "employee@company.ru"
 PASSWORD = "password123"  # Explicit development-only seed fixture.
 API_URL = "http://10.0.2.2:8000/api/v1"
@@ -289,15 +289,7 @@ class NativeSmoke:
         self.check("Native registration dropdown selection keeps the same app process alive", adb("shell", "pidof", PACKAGE, required=False).split() == [self.last_pid])
         self.click("У меня уже есть аккаунт", scroll=True)
         self.find("С возвращением")
-        self.click("Настроить сервер")
-        self.find("Подключение к серверу")
-        # A populated Kivy field has a tiny floating hint. Locate its visible
-        # current value instead; the saved API and actual server login are
-        # independently asserted below.
-        self.fill("http://127.0.0.1:8000/api/v1", API_URL)
-        self.click_primary("Подключение к серверу", API_URL)
-        self.find("С возвращением")
-        self.check("Remote API address persisted by the shipping settings UI", self.state().get("api_url") == API_URL)
+        self.check("QA build binds its fixed local API without manual settings", self.state().get("api_url") == API_URL)
         self.fill("Рабочая почта", EMAIL)
         self.fill("Пароль", PASSWORD)
         self.click_primary("С возвращением", EMAIL)
@@ -331,12 +323,15 @@ class NativeSmoke:
 
 
 def main():
+    global PACKAGE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apk", type=Path, required=True)
+    parser.add_argument("--package", default=PACKAGE)
     parser.add_argument("--output", type=Path, default=ROOT / "tests" / "artifacts" / "android-runtime")
     args = parser.parse_args()
+    PACKAGE = args.package
     smoke = NativeSmoke(args.output)
-    outcome = {"passed": False, "kind": "Actual ARM64 APK on Google APIs emulator with ARM translation; not a physical-device test"}
+    outcome = {"passed": False, "kind": "QA ARM64 APK with fixed local fixture API on Google APIs emulator; not the shipping endpoint or a physical-device test", "package": PACKAGE, "api_url": API_URL}
     try:
         smoke.run(args.apk)
         outcome["passed"] = True

@@ -82,10 +82,12 @@ class ClientStateTests(unittest.TestCase):
     def test_account_and_cache_survive_new_instance(self):
         with tempfile.TemporaryDirectory() as folder:
             state = LocalState(folder)
+            state.bind_api_url("https://138.16.179.111/api/v1")
             user = {"id": 7, "email": "test@example.org"}
             state.save_account("test-bearer", user, (dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)).isoformat())
             state.cache_put("bookings", [{"id": 3}])
             restored = LocalState(folder)
+            restored.bind_api_url("https://138.16.179.111/api/v1/")
             self.assertEqual(restored.account(), ("test-bearer", user))
             self.assertEqual(restored.cache_get("bookings")["payload"], [{"id": 3}])
             if sys.platform == "win32":
@@ -103,13 +105,27 @@ class ClientStateTests(unittest.TestCase):
     def test_logout_and_server_change_erase_private_data(self):
         with tempfile.TemporaryDirectory() as folder:
             state = LocalState(folder)
+            # Simulate an installation whose manually saved API is now obsolete.
+            state.data["api_url"] = "http://127.0.0.1:8094/api/v1"
             state.save_account("old", {"id": 1})
             state.cache_put("profile", {"private": True})
             state.media_path("photo.png").write_bytes(b"photo")
-            state.set_api_url("https://office.example.org/api/v1")
+            restored = LocalState(folder)
+            restored.bind_api_url("https://138.16.179.111/api/v1")
+            state = LocalState(folder)
+            self.assertEqual(state.api_url, "https://138.16.179.111/api/v1")
             self.assertEqual(state.account(), (None, None))
             self.assertNotIn("cache", state.data)
             self.assertEqual(list((Path(folder) / "media").iterdir()), [])
+
+    def test_legacy_unbound_credential_is_not_forwarded_to_new_api(self):
+        with tempfile.TemporaryDirectory() as folder:
+            state = LocalState(folder)
+            state.save_account("unknown-server-bearer", {"id": 7})
+            state.cache_put("profile", {"private": True})
+            state.bind_api_url("https://138.16.179.111/api/v1")
+            self.assertEqual(state.account(), (None, None))
+            self.assertIsNone(state.cache_get("profile"))
 
     def test_cache_is_bounded_and_account_switch_invalidates(self):
         with tempfile.TemporaryDirectory() as folder:

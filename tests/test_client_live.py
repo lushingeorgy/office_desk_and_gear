@@ -396,7 +396,13 @@ def gui_main(restored=False):
         stage("report create", lambda: app._save_report(fields({"start_date": "Начало · ГГГГ-ММ-ДД", "end_date": "Конец · ГГГГ-ММ-ДД"})))
         stage("reports archive", app.reports)
         stage("role management", app.users)
-        stage("settings", app.settings)
+        def fixed_connection():
+            assert not hasattr(app, "settings"), "Manual server settings must not be available"
+            assert app.api.base_url == os.environ["DSH_API_URL"]
+            assert app.state.api_url == app.api.base_url
+            labels = {getattr(widget, "text", "") for widget in app.root.walk()}
+            assert "Настроить сервер" not in labels and "Настройки сервера" not in labels
+        stage("fixed connection without manual settings", fixed_connection)
         stage("admin navigation", app.admin)
         stage("admin screenshot", lambda: snap("admin"))
         stage("home before shutdown", app.home)
