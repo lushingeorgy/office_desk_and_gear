@@ -193,7 +193,7 @@ class NativeSmoke:
         # would miss actual SIGILL/SIGSEGV failures and only time out on OCR.
         patterns = (r"FATAL EXCEPTION", r"Fatal signal \d+", r"(?:ImportError|ModuleNotFoundError):", r"dlopen failed:", r"ndk_translation.*Undefined instruction")
         if any(re.search(pattern, text, flags=re.I) for pattern in patterns):
-            raise AssertionError("Native/Python startup failure; inspect saved logcat")
+            raise AssertionError("Native/Python failure; inspect saved logcat")
 
     def find(self, phrase, *, timeout=40, scroll=False):
         target = normalized(phrase)

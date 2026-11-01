@@ -18,6 +18,7 @@ from kivy.metrics import dp, sp
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.image import Image
 from kivy.uix.popup import Popup
+from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 from kivy.utils import platform
 from kivymd.app import MDApp
@@ -27,7 +28,6 @@ from kivymd.uix.gridlayout import MDGridLayout
 from kivymd.uix.label import MDIcon
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
-from kivymd.uix.scrollview import MDScrollView
 from kivymd.uix.selectioncontrol import MDCheckbox
 from kivymd.uix.textfield import MDTextField, MDTextFieldHintText, MDTextFieldTrailingIcon
 
@@ -136,7 +136,7 @@ class OfficeDeskGearApp(MDApp):
         self.status = label("", 44, 12, MUTED)
         self.status.bind(texture_size=lambda w, size: setattr(w, "height", max(dp(42), min(dp(100), size[1] + dp(12)))))
         self.shell.add_widget(self.status)
-        self.scroll = MDScrollView(do_scroll_x=False, bar_width=dp(2), effect_cls=ScrollEffect, always_overscroll=False)
+        self.scroll = ScrollView(do_scroll_x=False, bar_width=dp(2), effect_cls=ScrollEffect, always_overscroll=False)
         self.anchor = AnchorLayout(anchor_y="top", padding=(dp(8), dp(12)), size_hint_y=None)
         self.body = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(14), size_hint_x=None)
         self.anchor.add_widget(self.body)
