@@ -78,6 +78,26 @@ def primary_button_bounds(picture):
     return candidates[0]
 
 
+def header_profile_point(picture):
+    """Locate the observed accent user icon in the top-right app header."""
+    import cv2
+    import numpy as np
+    frame = np.asarray(picture.convert("RGB"))
+    height, width = frame.shape[:2]
+    mask = cv2.inRange(frame, np.array([105, 140, 215]), np.array([175, 210, 255]))
+    mask[:, :int(width * .80)] = 0
+    mask[:int(height * .035)] = 0
+    mask[int(height * .16):] = 0
+    count, _, stats, centers = cv2.connectedComponentsWithStats(mask)
+    candidates = [(centers[i][1], centers[i][0]) for i in range(1, count)
+                  if 2 <= stats[i][2] <= width * .10 and 2 <= stats[i][3] <= width * .10
+                  and stats[i][4] >= 4]
+    if not candidates:
+        raise AssertionError("Top-right user icon was not visible in the app header")
+    y, x = min(candidates)
+    return round(x), round(y)
+
+
 class NativeSmoke:
     def __init__(self, directory):
         self.directory = directory
@@ -216,6 +236,14 @@ class NativeSmoke:
         adb("shell", "input", "tap", str(x), str(y))
         time.sleep(.7)
 
+    def open_profile(self):
+        self.find("Быстрые действия", timeout=60)
+        self.screenshot("header-profile-icon")
+        point = header_profile_point(self.picture)
+        (self.directory / f"{self.sequence:03d}-profile-icon.bounds.json").write_text(json.dumps({"point": point}))
+        adb("shell", "input", "tap", *point)
+        NativeSmoke.find(self, "Мой профиль", timeout=40)
+
     def click_primary(self, page, expected_text):
         # Only use the observed canvas bounds after the expected screen and
         # current field value have been confirmed through the shipping UI.
@@ -344,7 +372,7 @@ class NativeSmoke:
         self.fill("Рабочая почта", EMAIL)
         self.fill("Пароль", PASSWORD)
         self.click_primary("С возвращением", EMAIL)
-        self.find("Мой профиль", timeout=60)
+        self.find("Быстрые действия", timeout=60)
         state = self.wait_state(lambda item: bool(item.get("cache", {}).get("home")) and bool(item.get("credential")), "Login did not persist credential and the completed home response")
         credential = state.get("credential") or {}
         self.check("Android Keystore encrypted a persistent credential", credential.get("kind") == "android-keystore" and bool(credential.get("data")))
@@ -357,12 +385,13 @@ class NativeSmoke:
         # This fixture's home controls fit the fixed viewport. Never queue a
         # swipe on SDL's startup splash: Kivy can receive its release only
         # after the home buttons appear and navigate away during restoration.
-        self.find("Мой профиль", timeout=90)
+        self.find("Быстрые действия", timeout=90)
         restored = self.wait_state(lambda item: item.get("user", {}).get("id") == user_id, "Restart did not restore the account")
         self.check("Force-stop and process restart restore the same account", bool(user_id) and restored.get("user", {}).get("id") == user_id)
         self.check("Restart decrypts the same Keystore credential without a new login", restored.get("credential") == credential and self.server_sessions() == 1)
         self.screenshot("restored")
-        self.click("Выйти из аккаунта")
+        self.open_profile()
+        self.click("Выйти из аккаунта", scroll=True)
         self.find("С возвращением")
         cleared = self.wait_state(lambda item: all(key not in item for key in ("credential", "user", "cache")), "Logout did not clear private account state")
         self.check("Explicit logout removes credential, user and private cache", all(key not in cleared for key in ("credential", "user", "cache")))

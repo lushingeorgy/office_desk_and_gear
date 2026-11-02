@@ -7,7 +7,7 @@ on:
 concurrency:
   group: android-acceptance-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-# Reuse the signed 1.1.2 APKs only while client source matches their build.
+# Reuse the signed 1.1.4 APKs only while client source matches their build.
 # Remove the PR opt-in label after the staging acceptance has finished.
 jobs:
   android-remote-runtime:
@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Require the same client source as the reused APK
-        run: git diff --exit-code e39f3e389f6e053e4e4947cd2f787e016c57b0b4 HEAD -- client main.py buildozer.spec p4a-recipes
+        run: git diff --exit-code 7966dbc14f530ac82318b91d0c170ae55d974627 HEAD -- client main.py buildozer.spec p4a-recipes
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -35,7 +35,7 @@ jobs:
           name: OfficeDeskGear-android-debug
           path: runtime-apk
           github-token: ${{ github.token }}
-          run-id: 41321607241
+          run-id: 41503921173
       - name: Install black-box test dependencies
         run: |
           sudo apt-get update
@@ -97,7 +97,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Require the same client source as the reused APK
-        run: git diff --exit-code e39f3e389f6e053e4e4947cd2f787e016c57b0b4 HEAD -- client main.py buildozer.spec p4a-recipes
+        run: git diff --exit-code 7966dbc14f530ac82318b91d0c170ae55d974627 HEAD -- client main.py buildozer.spec p4a-recipes
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -110,7 +110,7 @@ jobs:
           name: OfficeDeskGear-android-runtime-qa
           path: runtime-apk
           github-token: ${{ github.token }}
-          run-id: 41321607241
+          run-id: 41503921173
       - name: Install runtime test dependencies
         run: |
           sudo apt-get update

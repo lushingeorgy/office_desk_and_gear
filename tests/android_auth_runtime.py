@@ -69,7 +69,7 @@ class AuthSuite(RemoteSuite):
 
     def enter(self):
         self.fill('Рабочая почта',self.email); self.fill('Пароль',self.password)
-        self.primary(); self.find('Мой профиль',timeout=50,scroll=True)
+        self.primary(); self.find('Быстрые действия',timeout=50,scroll=True)
         assert self.state()['user']['is_verified']
 
     def reset_password(self):
@@ -88,7 +88,7 @@ class AuthSuite(RemoteSuite):
         self.enter()
 
     def change_email(self):
-        self.home(); self.press('Мой профиль')
+        self.home(); self.open_profile()
         self.email='changed-'+self.tag+'@example.invalid'
         self.fill('Рабочая почта',self.email)
         self.primary(); self.find('Новая почта ожидает подтверждения')

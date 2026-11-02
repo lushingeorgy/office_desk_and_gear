@@ -64,7 +64,7 @@ class RemoteSuite(NativeSmoke):
                       'edit_equipment','roles','qr','analytics','delete_unused','notifications'}
             if getattr(function,'__name__','') in optional:
                 print('FAIL:',name,':',str(error),flush=True)
-                self.launch(); self.find('Мой профиль',timeout=90,scroll=True)
+                self.launch(); self.find('Быстрые действия',timeout=90,scroll=True)
                 return False
             raise
         self.save(False)
@@ -236,6 +236,7 @@ class RemoteSuite(NativeSmoke):
 
     def logout(self):
         self.home()
+        self.open_profile()
         self.press('Выйти из аккаунта')
         self.wait_state(lambda s:not s.get('credential') and not s.get('user'),'Logout did not erase credential')
         assert not self.state().get('cache'), 'Logout retained private cache'
@@ -321,7 +322,7 @@ class RemoteSuite(NativeSmoke):
         self.fill('Пароль',actor['password'])
         self.primary()
         self.wait_state(lambda s:s.get('user',{}).get('email')==actor['email'] and s.get('credential'),'Login was not persisted')
-        self.find('Мой профиль',scroll=True)
+        self.find('Быстрые действия',scroll=True)
         self.role=role
 
     @contextmanager
@@ -386,7 +387,7 @@ class RemoteSuite(NativeSmoke):
         assert item['assigned_user_id']==self.actors['employee']['id']
 
     def profile(self):
-        self.home(); self.press('Мой профиль')
+        self.home(); self.open_profile()
         new_name=self.actors['employee']['name']+'X'
         self.fill('ФИО',new_name)
         self.fill('Телефон','79990001122')
@@ -400,7 +401,7 @@ class RemoteSuite(NativeSmoke):
         state=self.state(); credential=state['credential']; user=state['user']['id']
         assert credential['kind']=='android-keystore'
         assert not re.search(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+',json.dumps(state))
-        self.launch(); self.find('Мой профиль',scroll=True)
+        self.launch(); self.find('Быстрые действия',scroll=True)
         restored=self.state()
         assert restored['user']['id']==user and restored['credential']==credential
         self.ids['restored_user_id']=user
@@ -555,7 +556,7 @@ class RemoteSuite(NativeSmoke):
         with self.api() as api: assert any(x['is_read'] for x in api.get_notifications())
 
     def photo(self):
-        self.home(); self.press('Мой профиль')
+        self.home(); self.open_profile()
         self.press('Сделать фото'); time.sleep(2); self.allow_permission()
         self.find('Фотография',timeout=25)
         time.sleep(3); self.screenshot('emulated-camera')
@@ -568,7 +569,7 @@ class RemoteSuite(NativeSmoke):
             api.download_private(user['avatar_url'],target)
             from PIL import Image
             with Image.open(target) as image: assert min(image.size)>100
-        self.home(); self.press('Мой профиль')
+        self.home(); self.open_profile()
         self.press('Посмотреть фото профиля')
         self.find('Фотография'); self.screenshot('private-avatar')
         self.native_back()
@@ -578,19 +579,19 @@ class RemoteSuite(NativeSmoke):
         from urllib.parse import urlsplit
         host=socket.gethostbyname(urlsplit(DEFAULT_API_URL).hostname)
         assert re.fullmatch(r'[0-9.]+',host)
-        self.home(); self.find('Мой профиль',scroll=True)
+        self.home(); self.find('Быстрые действия',scroll=True)
         before=self.state(); assert before.get('cache',{}).get('home')
         adb('root'); adb('wait-for-device')
         rule=['OUTPUT','-d',host,'-p','tcp','--dport','443','-j','REJECT']
         adb('shell','iptables','-I',*rule)
         try:
-            self.launch(); self.find('Мой профиль',timeout=90,scroll=True)
+            self.launch(); self.find('Быстрые действия',timeout=90,scroll=True)
             self.find('Нет связи',timeout=45,scroll=True)
             state=self.state()
             assert state['user']['id']==before['user']['id'] and state['credential']==before['credential']
             assert state['cache']['home']['payload']==before['cache']['home']['payload']
         finally: adb('shell','iptables','-D',*rule,required=False)
-        self.home(); self.find('Мой профиль',scroll=True)
+        self.home(); self.find('Быстрые действия',scroll=True)
         self.fatal_check()
 
     def own_cancel(self):
