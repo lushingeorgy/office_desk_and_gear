@@ -10,22 +10,19 @@ import re
 from functools import partial
 from pathlib import Path
 
+from kivy.animation import Animation
 from kivy.clock import Clock
 from kivy.core.window import Window
-from kivy.effects.scroll import ScrollEffect
 from kivy.graphics import Color, RoundedRectangle
 from kivy.metrics import dp, sp
-from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.image import Image
 from kivy.uix.popup import Popup
-from kivy.uix.scrollview import ScrollView
 from kivy.uix.widget import Widget
 from kivy.utils import platform
 from kivymd.app import MDApp
 from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDButton, MDButtonIcon, MDButtonText
+from kivymd.uix.button import MDButton, MDButtonIcon, MDButtonText, MDIconButton
 from kivymd.uix.gridlayout import MDGridLayout
-from kivymd.uix.label import MDIcon
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.selectioncontrol import MDCheckbox
@@ -37,6 +34,7 @@ from client.core.storage import LocalState
 from client.core.worker import BackgroundWorker
 from client.registration import ACCENT, BACKGROUND, BORDER, ERROR, MUTED, SUCCESS, SURFACE, TEXT, label
 from client.services.api_client import ApiClient, ApiError
+from client.ui import LoadingLine, NavigationItem, PageHost, StartupScreen
 from client.viewmodels.session import SessionViewModel
 
 LOG = logging.getLogger(__name__)
@@ -98,6 +96,7 @@ class OfficeDeskGearApp(MDApp):
     def build(self):
         from client.core.graphics_compat import initialize_ripple_shader_at_creation
         initialize_ripple_shader_at_creation()
+        self.theme_cls.theme_style_switch_animation = False
         self.theme_cls.theme_style = "Dark"
         self.theme_cls.primary_palette = "Blue"
         Window.clearcolor = BACKGROUND
@@ -116,9 +115,14 @@ class OfficeDeskGearApp(MDApp):
         self.device = DeviceTools(platform, self.state, Clock.schedule_once)
         self.api.on_auth_lost = lambda message: Clock.schedule_once(lambda _dt: self.auth_lost(message))
         self.busy, self.stopped = False, False
+        self._mutating = False
+        self._pending_job = None
+        self._job_generation = None
+        self._section = "home"
         self.generation = 0
         self.page = "login"
         self._menus, self._events = [], []
+        self._reveals = set()
         self.camera = None
         self._scan_busy = False
         self._pause_camera_mode = None
@@ -126,37 +130,73 @@ class OfficeDeskGearApp(MDApp):
                         "sort": "number", "order": "asc", "date": dt.date.today().isoformat()}
         self.desk_offset, self.map_mode = 0, False
         self.root_screen = MDScreen(md_bg_color=BACKGROUND)
-        self.shell = MDBoxLayout(orientation="vertical", padding=(dp(16), dp(10)), spacing=dp(5))
+        self.shell = MDBoxLayout(orientation="vertical", padding=(dp(16), dp(10)), spacing=dp(5), opacity=0)
         self.root_screen.add_widget(self.shell)
-        header = MDBoxLayout(size_hint_y=None, height=dp(42), spacing=dp(10))
-        header.add_widget(MDIcon(icon="office-building-outline", theme_icon_color="Custom", icon_color=ACCENT,
-                                 size_hint_x=None, width=dp(28)))
-        header.add_widget(label("Office Desk & Gear", 42, 16))
+        header = MDBoxLayout(size_hint_y=None, height=dp(56), spacing=dp(8))
+        self.back_button = MDIconButton(icon="arrow-left", theme_icon_color="Custom", icon_color=ACCENT,
+                                        size_hint=(None, None), size=(dp(44), dp(44)),
+                                        pos_hint={"center_y": 0.5})
+        self.back_button.bind(on_release=lambda *_: self._navigate(self._back))
+        header.add_widget(self.back_button)
+        brand = MDBoxLayout(orientation="vertical", padding=(0, dp(6)))
+        brand.add_widget(label("Office Desk & Gear", 24, 16))
+        brand.add_widget(label("Рабочее пространство", 20, 11, MUTED))
+        header.add_widget(brand)
+        self.profile_button = MDIconButton(icon="account-outline", style="tonal", theme_icon_color="Custom",
+                                           icon_color=ACCENT, theme_bg_color="Custom", md_bg_color=SURFACE,
+                                           size_hint=(None, None), size=(dp(48), dp(48)),
+                                           pos_hint={"center_y": 0.5})
+        self.profile_button.bind(on_release=lambda *_: self._navigate(self.profile, "profile"))
+        header.add_widget(self.profile_button)
         self.shell.add_widget(header)
-        self.status = label("", 44, 12, MUTED)
-        self.status.bind(texture_size=lambda w, size: setattr(w, "height", max(dp(42), min(dp(100), size[1] + dp(12)))))
+        self.progress = LoadingLine()
+        self.progress.stop()
+        self.shell.add_widget(self.progress)
+        self.status = label("", 30, 12, MUTED)
+        self.status.bind(texture_size=lambda w, size: setattr(w, "height", max(dp(30), min(dp(80), size[1] + dp(8)))))
         self.shell.add_widget(self.status)
-        self.scroll = ScrollView(do_scroll_x=False, bar_width=dp(2), effect_cls=ScrollEffect, always_overscroll=False)
-        self.anchor = AnchorLayout(anchor_y="top", padding=(dp(8), dp(12)), size_hint_y=None)
-        self.body = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(14), size_hint_x=None)
-        self.anchor.add_widget(self.body)
-        self.scroll.add_widget(self.anchor)
-        self.shell.add_widget(self.scroll)
-        self.navigation = MDBoxLayout(size_hint_y=None, height=dp(52), spacing=dp(2))
+        self.pages = PageHost()
+        self.shell.add_widget(self.pages)
+        self.navigation = MDBoxLayout(size_hint_y=None, height=0, spacing=dp(3),
+                                       padding=dp(4), md_bg_color=SURFACE, radius=[dp(18)])
+        self.nav_items = {}
+        for name, title, icon, method in (
+                ("home", "Главная", "home-outline", self.home),
+                ("desks", "Столы", "desk", self.desks),
+                ("bookings", "Брони", "calendar-check-outline", self.bookings),
+                ("equipment", "Техника", "monitor", self.equipment),
+                ("tickets", "Заявки", "message-alert-outline", self.tickets)):
+            item = NavigationItem(title, icon)
+            item.bind(on_release=lambda _w, method=method, name=name: self._navigate(method, name))
+            self.nav_items[name] = item
+            self.navigation.add_widget(item)
         self.shell.add_widget(self.navigation)
-        self.body.bind(height=self._layout)
-        self.root_screen.bind(size=self._layout)
-        self._layout()
+        self.scroll = self.pages.stage()
+        self.body, self.anchor = self.scroll.body, self.scroll.anchor
+        self.startup = StartupScreen()
+        self.root_screen.add_widget(self.startup)
         return self.root_screen
 
     def on_start(self):
         self._configure_system_bars()
         Window.bind(on_keyboard=self._on_keyboard)
+        # Let the branded screen draw before restoring storage/building forms.
+        self._startup_event = Clock.schedule_once(self._begin_startup, 0)
+
+    def _begin_startup(self, _dt):
+        self._startup_event = Clock.schedule_once(self._restore_session, 0.12)
+
+    def _restore_session(self, _dt):
         self.user = self.model.restore()
         if self.user:
             self.home()
         else:
             self.login()
+        self._startup_event = Clock.schedule_once(self._finish_startup, 0.12)
+
+    def _finish_startup(self, _dt):
+        self.shell.opacity = 1
+        self.startup.dismiss()
 
     def _configure_system_bars(self):
         if platform == "android":
@@ -168,15 +208,14 @@ class OfficeDeskGearApp(MDApp):
             color = "#" + "".join(f"{round(channel * 255):02x}" for channel in BACKGROUND[:3])
             update_system_ui(color, color, "Light", pad_status=True, pad_nav=True)
 
-    def _layout(self, *_):
-        self.body.width = max(dp(260), min(dp(620), self.root_screen.width - dp(48)))
-        self.anchor.height = max(self.scroll.height, self.body.height + dp(24))
-
     def note(self, text, error=False, success=False):
         self.status.text = text
         self.status.text_color = ERROR if error else SUCCESS if success else MUTED
 
     def _cleanup_page(self):
+        for widget in self.body.walk():
+            if isinstance(widget, MDTextField) and widget.focus:
+                widget.focus = False
         effect = getattr(getattr(self, "scroll", None), "effect_y", None)
         if effect is not None:
             lower, upper = sorted((effect.min, effect.max))
@@ -185,6 +224,10 @@ class OfficeDeskGearApp(MDApp):
         for event in self._events:
             event.cancel()
         self._events.clear()
+        for target in self._reveals:
+            Animation.cancel_all(target, "opacity")
+            target.opacity = 1
+        self._reveals.clear()
         for menu in self._menus:
             menu.dismiss()
         self._menus.clear()
@@ -193,19 +236,54 @@ class OfficeDeskGearApp(MDApp):
     def page_start(self, name, title, subtitle=""):
         self._cleanup_page()
         self.generation += 1
+        self._pending_job = None
+        sections = {
+            "home": "home", "desks": "desks", "filters": "desks", "desk": "desks",
+            "bookings": "bookings", "admin_bookings": "bookings", "booking": "bookings",
+            "equipment": "equipment", "admin_equipment": "equipment", "equipment_detail": "equipment",
+            "scanner": "equipment", "qr": "equipment", "equipment_form": "equipment", "assign": "equipment",
+            "tickets": "tickets", "admin_tickets": "tickets", "ticket_detail": "tickets", "ticket_form": "tickets",
+            "admin": "home", "notifications": "home", "analytics": "home", "reports": "home", "users": "home",
+            "desk_form": "desks",
+        }
+        self._section = sections.get(name, self._section)
         self.page = name
-        self.body.clear_widgets()
-        self.navigation.clear_widgets()
-        self.navigation.height = dp(52) if self.user else 0
+        # Logout/auth loss must immediately discard the previous account's UI.
+        if not self.user:
+            self.pages.clear()
+        self.scroll = self.pages.stage()
+        self.body, self.anchor = self.scroll.body, self.scroll.anchor
+        self.navigation.height = dp(72) if self.user else 0
+        self.navigation.opacity = 1 if self.user else 0
+        self.navigation.disabled = not bool(self.user)
+        self.profile_button.opacity = 1 if self.user else 0
+        self.profile_button.disabled = not bool(self.user)
+        self.profile_button.icon = "account" if name == "profile" else "account-outline"
+        self.back_button.icon = "office-building-outline" if name in {"home", "login"} else "arrow-left"
+        self.back_button.disabled = name in {"home", "login"}
+        for key, item in self.nav_items.items():
+            item.select(bool(self.user) and name != "profile" and key == self._section)
         self.note("")
-        self.scroll.scroll_y = 1
-        self.body.add_widget(label(title, 42, 26))
+        self.text(title, size=26)
         if subtitle:
             self.text(subtitle, MUTED)
-        if self.user:
-            for title_, method in (("Главная", self.home), ("Столы", self.desks), ("Брони", self.bookings),
-                                   ("Техника", self.equipment), ("Заявки", self.tickets)):
-                self.navigation.add_widget(self.button(title_, method, compact=True))
+
+    def _navigate(self, method, destination=None):
+        if self._mutating:
+            self.note("Дождитесь сохранения изменений")
+            return
+        if destination and self.page == destination:
+            return
+        method()
+
+    def _back(self):
+        if not self.user:
+            self.login()
+        elif self.page in {"home", "desks", "bookings", "equipment", "tickets", "profile", "admin", "notifications"}:
+            self.home()
+        else:
+            {"home": self.home, "desks": self.desks, "bookings": self.bookings,
+             "equipment": self.equipment, "tickets": self.tickets}[self._section]()
 
     def text(self, value, color=TEXT, target=None, size=14):
         item = label(str(value), 32, size, color)
@@ -346,30 +424,69 @@ class OfficeDeskGearApp(MDApp):
         self.body.add_widget(box)
         return box
 
-    def job(self, function, success, message="Загрузка…", cache_key=None, cached=None):
-        generation = self.generation
-        if self.busy:
-            self.note("Дождитесь завершения текущего запроса")
+    def _render_result(self, callback, value, target=None, animate=True):
+        if target is None or not animate:
+            callback(value)
             return
+        Animation.cancel_all(target, "opacity")
+        target.opacity = 0
+        self._reveals.add(target)
+        changed = callback(value)
+        if changed is False:
+            target.opacity = 1
+            self._reveals.discard(target)
+            return
+        def reveal(_dt):
+            self._reveals.discard(target)
+            Animation(opacity=1, duration=0.18, t="out_quad").start(target)
+        self._events.append(Clock.schedule_once(
+            lambda _dt: self._events.append(Clock.schedule_once(reveal, 0)), 0))
+
+    def _start_pending_job(self):
+        pending, self._pending_job = self._pending_job, None
+        if pending and pending[0] == self.generation and not self.stopped:
+            pending[1]()
+
+    def job(self, function, success, message="Загрузка…", cache_key=None, cached=None,
+            target=None, exclusive=False, _show_cache=True):
+        generation = self.generation
         entry = self.model.cached(cache_key)
-        if entry and cached:
-            cached(entry["payload"])
-            self.note("Сохранённые данные · обновляем…")
-        else:
-            self.note(message)
+        if entry and cached and _show_cache:
+            self._render_result(cached, entry["payload"], target, animate=False)
+        if self.busy:
+            if not exclusive and not self._mutating and self._job_generation != generation:
+                # One running HTTP request and only the latest navigation intent.
+                # Do not fill the worker queue with tabs the user has left.
+                self._pending_job = (generation, partial(
+                    self.job, function, success, message, cache_key, cached,
+                    target=target, _show_cache=False))
+                self.note("Сохранённые данные · обновляем…" if entry else message)
+            else:
+                self.note("Дождитесь завершения текущего запроса")
+            return
+        self.note("Сохранённые данные · обновляем…" if entry and cached else message)
         self.busy = True
+        self._mutating = exclusive
+        self._job_generation = generation
+        self.progress.start()
+
+        def settled():
+            self.busy = self._mutating = False
+            self.progress.stop()
 
         def done(value, stale=False):
-            self.busy = False
-            if self.stopped or stale:
-                return
-            if generation == self.generation:
+            settled()
+            if not self.stopped and not stale and generation == self.generation:
                 self.note("")
-                success(value)
+                # An unchanged cached list keeps its widgets, scroll and focus.
+                if not (entry and cached == success and value == entry["payload"]):
+                    self._render_result(success, value, target)
+            self._start_pending_job()
 
         def failed(error):
-            self.busy = False
+            settled()
             if self.stopped or generation != self.generation:
+                self._start_pending_job()
                 return
             if isinstance(error, ApiError):
                 message_ = str(error)
@@ -383,16 +500,17 @@ class OfficeDeskGearApp(MDApp):
                 self.note("Нет связи · показан кэш от " + dt.datetime.fromtimestamp(entry["at"]).strftime("%d.%m %H:%M"), error=True)
             else:
                 self.note(message_, error=True)
+            self._start_pending_job()
 
         if not self.model.execute(function, done, failed, cache_key=cache_key):
-            self.busy = False
+            settled()
             self.note("Очередь запросов занята. Повторите действие", error=True)
 
     def mutate(self, function, success, message="Сохраняем…"):
         def finish(value):
             self.model.invalidate()
             success(value)
-        self.job(function, finish, message)
+        self.job(function, finish, message, exclusive=True)
 
     def auth_lost(self, message="Сессия завершилась. Войдите снова"):
         if not self.user:
@@ -437,7 +555,7 @@ class OfficeDeskGearApp(MDApp):
                 if error.status_code == 403:
                     return {"verify_email": values["email"]}
                 raise
-        self.job(authenticate, logged_in, "Входим в аккаунт…")
+        self.job(authenticate, logged_in, "Входим в аккаунт…", exclusive=True)
 
     def _verify_entry(self, email_field):
         values = self.values({"email": email_field})
@@ -473,7 +591,7 @@ class OfficeDeskGearApp(MDApp):
             else:
                 self.login()
                 self.note("Профиль создан. Войдите в аккаунт", success=True)
-        self.job(lambda: self.api.register(**values), registered, "Создаём профиль…")
+        self.job(lambda: self.api.register(**values), registered, "Создаём профиль…", exclusive=True)
 
     def verify(self, email):
         self.page_start("verify", "Подтвердить почту", "Введите код из письма для " + email)
@@ -524,10 +642,16 @@ class OfficeDeskGearApp(MDApp):
 
     def home(self):
         self.page_start("home", "Рабочее пространство", self.user.get("full_name", "") + " · " + ROLES.get(self.user.get("role"), "Сотрудник"))
-        content = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(12))
+        content = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(12),
+                              padding=dp(16), md_bg_color=SURFACE, radius=[dp(16)])
         self.body.add_widget(content)
+        self.text("Ищем ваше место на сегодня…", MUTED, target=content)
+        last_data = [None]
 
         def display(data):
+            if data == last_data[0]:
+                return False
+            last_data[0] = data
             content.clear_widgets()
             booking = data.get("active")
             if booking:
@@ -538,14 +662,15 @@ class OfficeDeskGearApp(MDApp):
                 self.action("Открыть бронь", lambda: self.booking_detail(booking), target=content)
                 self.action("Показать на плане", lambda: self._home_map(booking, desk), target=content)
             else:
-                self.text("Сегодня пока нет активной брони", MUTED, target=content)
-                self.action("Выбрать рабочее место", self.desks, target=content, primary=True)
+                self.text("Сегодня пока нет активной брони", target=content)
+                self.text("Выберите удобное место в офисе и забронируйте его на нужное время.", MUTED, target=content, size=13)
 
+        self.text("Быстрые действия", MUTED, size=12)
+        self.action("Забронировать рабочее место", self.desks, True)
+        self.action("Мои бронирования", self.bookings)
         self.action("Уведомления", self.notifications)
-        self.action("Мой профиль", self.profile)
         if self.user.get("role") in {"it_admin", "office_manager"}:
             self.action("Управление офисом", self.admin)
-        self.action("Выйти из аккаунта", self.logout)
 
         def fetch():
             booking = self.api.get_active_booking()
@@ -555,8 +680,8 @@ class OfficeDeskGearApp(MDApp):
         def loaded(data):
             self.user = data["user"]
             self.state.update_user(self.user)
-            display(data)
-        self.job(fetch, loaded, cache_key="home", cached=display)
+            return display(data)
+        self.job(fetch, loaded, cache_key="home", cached=display, target=content)
 
     def _home_map(self, booking, desk):
         self.map_mode = True
@@ -588,7 +713,7 @@ class OfficeDeskGearApp(MDApp):
             clear()
             if error and error.status_code not in {401, 403}:
                 self.note("Вход и кэш удалены с устройства. Серверная сессия истечёт автоматически")
-        self.job(request, done, "Выходим…")
+        self.job(request, done, "Выходим…", exclusive=True)
 
     def profile(self):
         self.page_start("profile", "Мой профиль", ROLES.get(self.user.get("role"), "Сотрудник"))
@@ -603,6 +728,7 @@ class OfficeDeskGearApp(MDApp):
         self.action("Выбрать фото", lambda: self.choose_photo(lambda path: self._selected_photo(photo, path)))
         self.action("Сделать фото", lambda: self.camera_photo(lambda path: self._selected_photo(photo, path)))
         self.action("Сохранить профиль", lambda: self._profile_save(fields, photo), True)
+        self.action("Выйти из аккаунта", self.logout)
 
     def _profile_save(self, fields, photo):
         values = self.values(fields)
@@ -631,7 +757,7 @@ class OfficeDeskGearApp(MDApp):
         self.mutate(request, saved)
 
     def desks(self, booking_notice=None, interval=None):
-        self.page_start("desks", "Рабочие места", "Выберите дату, этаж и комплектацию. Кэш показывает последнее известное состояние.")
+        self.page_start("desks", "Рабочие места", "Найдите удобный стол и выберите время бронирования.")
         if booking_notice:
             self.text("Бронирование не выполнено: " + booking_notice, ERROR)
         search = self.field("Поиск стола на сервере", self.filters["search"])
@@ -678,7 +804,7 @@ class OfficeDeskGearApp(MDApp):
             partial_message = self.api.last_meta.get("x-partial-match")
             return {"desks": desks, "bookings": self.api.get_availability(date=filters["date"]), "partial": partial_message,
                     "interval_label": start_at.strftime("%d.%m %H:%M") + "–" + end_at.strftime("%d.%m %H:%M")}
-        self.job(fetch, self._display_desks, cache_key=key, cached=self._display_desks)
+        self.job(fetch, self._display_desks, cache_key=key, cached=self._display_desks, target=self.desk_results)
 
     def _display_desks(self, data):
         self.desk_results.clear_widgets()
@@ -835,7 +961,7 @@ class OfficeDeskGearApp(MDApp):
                 self.action(self._booking_place(item) + f" · {moment(item['planed_at'])}" + (" · отменена" if item.get("is_cancelled") else ""),
                             partial(self.booking_detail, item, admin), target=content)
         self.job(self.api.get_bookings if admin else self.api.get_booking_history, display,
-                 cache_key="all_bookings" if admin else "my_bookings", cached=display)
+                 cache_key="all_bookings" if admin else "my_bookings", cached=display, target=content)
 
     @staticmethod
     def _booking_place(booking):
@@ -893,7 +1019,7 @@ class OfficeDeskGearApp(MDApp):
                 self.action(f"#{item['id']} · {item['type']} · {STATUSES.get(item['status'], item['status'])}",
                             partial(self.equipment_detail, item), target=content)
         self.job(self.api.admin_list_equipment if admin else self.api.get_my_equipment, display,
-                 cache_key="equipment:all" if admin else "equipment:my", cached=display)
+                 cache_key="equipment:all" if admin else "equipment:my", cached=display, target=content)
 
     def equipment_detail(self, item):
         inventory = item.get("inventory_number")
@@ -962,7 +1088,7 @@ class OfficeDeskGearApp(MDApp):
                 self.action(f"#{item['id']} · {STATUSES.get(item['status'], item['status'])} · устройство #{item['equipment_id']}",
                             partial(self.ticket_detail, item), target=content)
         self.job(self.api.admin_list_tickets if admin else self.api.get_my_tickets, display,
-                 cache_key="tickets:all" if admin else "tickets:my", cached=display)
+                 cache_key="tickets:all" if admin else "tickets:my", cached=display, target=content)
 
     def ticket_detail(self, item):
         self.page_start("ticket_detail", f"Обращение №{item['id']}", STATUSES.get(item["status"], item["status"]) + " · " + moment(item["created_at"]))
@@ -987,7 +1113,7 @@ class OfficeDeskGearApp(MDApp):
                 raw = event.get("text") or event.get("comment") or event.get("status") or "Обновление"
                 text_ = STATUSES.get(raw, raw)
                 self.text(f"{moment(event.get('created_at'))} · {text_}", MUTED, target=events, size=13)
-        self.job(lambda: self.api.ticket_events(item["id"]), display, cache_key=f"ticket-events:{item['id']}", cached=display)
+        self.job(lambda: self.api.ticket_events(item["id"]), display, cache_key=f"ticket-events:{item['id']}", cached=display, target=events)
 
     def _comment(self, item, field):
         values = self.values({"text": field})
@@ -1007,7 +1133,7 @@ class OfficeDeskGearApp(MDApp):
                 self.text(moment(item.get("created_at")) + " · " + item.get("text", ""), MUTED if item.get("is_read") else TEXT, target=content)
                 if not item.get("is_read"):
                     self.action("Отметить прочитанным", partial(self._read_notification, item["id"]), target=content)
-        self.job(self.api.get_notifications, display, cache_key="notifications", cached=display)
+        self.job(self.api.get_notifications, display, cache_key="notifications", cached=display, target=content)
 
     def _read_notification(self, notification_id):
         self.mutate(lambda: self.api.read_notification(notification_id), lambda _r: self.notifications())
@@ -1206,7 +1332,8 @@ class OfficeDeskGearApp(MDApp):
                 self.text(f"{row['equipment_type']} · {row['ticket_count']}", MUTED, target=target)
                 target.add_widget(OccupancyBar(row["ticket_count"] / maximum))
             self.action("Экспорт отчёта CSV", lambda: self._export_report(report), target=target)
-        self.job(lambda: self.api.admin_get_analytics(**values), display, cache_key="analytics:" + repr(values), cached=display)
+        self.job(lambda: self.api.admin_get_analytics(**values), display, cache_key="analytics:" + repr(values), cached=display,
+                 target=self.analytics_results)
 
     def _export_report(self, report):
         path = self.state.media_path("office-report.csv")
@@ -1241,7 +1368,7 @@ class OfficeDeskGearApp(MDApp):
             for item in items:
                 self.text(f"Отчёт №{item['id']} · {moment(item['generated_at'])}", target=content)
                 self.action("Экспортировать JSON", partial(self._export_snapshot, item), target=content)
-        self.job(self.api.list_reports, display, cache_key="reports", cached=display)
+        self.job(self.api.list_reports, display, cache_key="reports", cached=display, target=content)
 
     def _export_snapshot(self, report):
         import json
@@ -1421,8 +1548,8 @@ class OfficeDeskGearApp(MDApp):
     def _on_keyboard(self, _window, key, *_args):
         if key != 27:
             return False
-        if self.busy:
-            self.note("Дождитесь завершения текущего запроса")
+        if self._mutating:
+            self.note("Дождитесь сохранения изменений")
             return True
         for menu in self._menus:
             if menu.parent:
@@ -1434,7 +1561,7 @@ class OfficeDeskGearApp(MDApp):
                 widget.focus = False
             return True
         if self.user and self.page != "home":
-            self.home()
+            self._back()
             return True
         if not self.user and self.page != "login":
             self.login()
@@ -1444,11 +1571,15 @@ class OfficeDeskGearApp(MDApp):
     def on_pause(self):
         self._pause_camera_mode = self.page == "scanner" and self.camera is not None
         self._cleanup_page()
+        self.pages.cancel_pending()
         self.model.pause()
         return True
 
     def on_resume(self):
         self._configure_system_bars()
+        # A paused, staged page must still finish its transition on resume.
+        if self.scroll is not self.pages.current:
+            self.pages._reveal(self.scroll)
         if self._pause_camera_mode and self.page == "scanner":
             self.device.camera_permission(self._start_scanner)
         elif self.user and not self.busy:
@@ -1461,7 +1592,11 @@ class OfficeDeskGearApp(MDApp):
 
     def on_stop(self):
         self.stopped = True
+        self._startup_event.cancel()
         Window.unbind(on_keyboard=self._on_keyboard)
         self._cleanup_page()
+        self.pages.clear()
+        self.progress.stop()
+        self.startup.progress.stop()
         self.device.close()
         self.model.close()

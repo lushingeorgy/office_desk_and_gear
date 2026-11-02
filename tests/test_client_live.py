@@ -449,7 +449,7 @@ def gui_main(restored=False):
             errors.append("UI scenario timed out at stage " + str(index[0]))
             app.stop()
             return False
-        if app.busy:
+        if app.busy or app.startup.parent:
             return True
         try:
             if waiting[0]:
