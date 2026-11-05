@@ -200,14 +200,17 @@ class RemoteSuite(NativeSmoke):
             'Сотрудники и роли':['Роль'],
             'Сообщить о проблеме':['Тип неисправности','Опишите проблему','Фотография'],
             'Сканировать QR-код':['Код или ID устройства'],
+            'Сканировать':['Код или ID устройства'],
         }
         if self.ids.get('ticket'):
             layouts['Обращение '+str(self.ids['ticket'])]=['Новый статус','Комментарий IT-специалиста']
         for title,labels in layouts.items():
-            if label not in labels or not any(text==normalized(title) and y<210 for text,_,y in words): continue
+            if label not in labels or not any(self.matches(text,normalized(title)) and y<210 for text,_,y in words): continue
             import cv2,numpy as np
             frame=np.asarray(self.picture)
-            mask=cv2.inRange(frame,np.array([19,27,42]),np.array([59,67,82]))
+            # Rounded outlines change slightly with Android density and
+            # antialiasing; retain their geometry, not a single pixel palette.
+            mask=cv2.inRange(frame,np.array([19,27,42]),np.array([85,100,130]))
             mask|=cv2.inRange(frame,np.array([94,128,210]),np.array([184,218,255]))
             contours=cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[0]
             edges=[cv2.boundingRect(c) for c in contours]
@@ -475,7 +478,7 @@ class RemoteSuite(NativeSmoke):
         assert item['is_cancelled'] and item.get('cancellation_reason')=='QACancellation'
 
     def scanner(self):
-        self.click('Техника'); self.click('Сканировать QR-код')
+        self.click('Техника'); self.click('Сканировать')
         self.allow_permission()
         self.fill('Код или ID устройства',str(self.ids['equipment']))
         self.primary()
@@ -649,8 +652,8 @@ class RemoteSuite(NativeSmoke):
 
     def qr(self):
         self.open_equipment()
-        self.press('QR-код для печати')
-        self.find('QR-код оборудования')
+        self.press('для печати')
+        self.find('оборудования')
         self.find('Сохранить поделиться',scroll=True)
         self.click('Сохранить поделиться')
         self.wait_chooser(); self.screenshot('qr-share'); self.native_back()

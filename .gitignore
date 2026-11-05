@@ -12,6 +12,33 @@ venv/
 db_backup/
 /backups/
 *.dump
+*.sql
+*.sql.*
+*.dump.*
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.db.*
+*.bak
+*.backup
+*.backup.*
+backups/
+
+# Local credentials and signing keys (examples remain versioned below).
+.envrc
+.pgpass
+pgpass.conf
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
 
 .clientdata/
 client/.clientdata/
