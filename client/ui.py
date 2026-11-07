@@ -1,6 +1,4 @@
 """Persistent navigation and lightweight, frame-safe page transitions."""
-from pathlib import Path
-
 from kivy.animation import Animation
 from kivy.clock import Clock
 from kivy.graphics import Color, RoundedRectangle
@@ -9,7 +7,6 @@ from kivy.properties import BooleanProperty, NumericProperty
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.image import Image
 from kivy.uix.scrollview import ScrollView
 from kivy.effects.scroll import ScrollEffect
 from kivy.uix.widget import Widget
@@ -17,6 +14,7 @@ from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.label import MDIcon
 
 from client.registration import ACCENT, BACKGROUND, MUTED, SURFACE, TEXT, label
+from client.theme import SURFACE_RAISED
 
 
 class NavigationItem(ButtonBehavior, MDBoxLayout):
@@ -24,8 +22,8 @@ class NavigationItem(ButtonBehavior, MDBoxLayout):
 
     def __init__(self, title, icon, **kwargs):
         super().__init__(orientation="vertical", padding=(0, dp(6)), spacing=dp(2),
-                         radius=[dp(14)], **kwargs)
-        self.caption = label(title, 20, 10, MUTED)
+                         radius=[dp(10)], **kwargs)
+        self.caption = label(title, 20, 11, MUTED)
         self.caption.halign = "center"
         self.symbol = MDIcon(icon=icon, theme_icon_color="Custom", icon_color=MUTED)
         mark = AnchorLayout()
@@ -37,7 +35,7 @@ class NavigationItem(ButtonBehavior, MDBoxLayout):
     def select(self, active):
         self.active = active
         self.symbol.icon_color = self.caption.text_color = ACCENT if active else MUTED
-        self.md_bg_color = (*ACCENT[:3], 0.12) if active else (0, 0, 0, 0)
+        self.md_bg_color = SURFACE_RAISED if active else (0, 0, 0, 0)
 
 
 class PageView(ScrollView):
@@ -162,8 +160,10 @@ class StartupScreen(MDBoxLayout):
         center = AnchorLayout()
         content = MDBoxLayout(orientation="vertical", size_hint=(None, None),
                               size=(dp(288), dp(300)), spacing=dp(12))
-        content.add_widget(Image(source=str(Path(__file__).parent / "assets" / "icon.png"),
-                                 size_hint_y=None, height=dp(140), fit_mode="contain"))
+        mark = AnchorLayout(size_hint_y=None, height=dp(128))
+        mark.add_widget(MDIcon(icon="desk", theme_icon_color="Custom", icon_color=ACCENT,
+                               theme_font_size="Custom", font_size=dp(64)))
+        content.add_widget(mark)
         title = label("Office Desk & Gear", 36, 23, TEXT)
         title.halign = "center"
         content.add_widget(title)

@@ -5,6 +5,7 @@ import csv
 import datetime as dt
 import hashlib
 import logging
+import math
 import os
 import re
 from functools import partial
@@ -34,6 +35,7 @@ from client.core.storage import LocalState
 from client.core.worker import BackgroundWorker
 from client.registration import ACCENT, BACKGROUND, BORDER, ERROR, MUTED, SUCCESS, SURFACE, TEXT, label
 from client.services.api_client import ApiClient, ApiError
+from client.theme import configure_theme
 from client.ui import LoadingLine, NavigationItem, PageHost, StartupScreen
 from client.viewmodels.session import SessionViewModel
 
@@ -96,9 +98,7 @@ class OfficeDeskGearApp(MDApp):
     def build(self):
         from client.core.graphics_compat import initialize_ripple_shader_at_creation
         initialize_ripple_shader_at_creation()
-        self.theme_cls.theme_style_switch_animation = False
-        self.theme_cls.theme_style = "Dark"
-        self.theme_cls.primary_palette = "Blue"
+        configure_theme(self.theme_cls)
         Window.clearcolor = BACKGROUND
         Window.softinput_mode = "below_target"
         if platform not in {"android", "ios"}:
@@ -127,7 +127,8 @@ class OfficeDeskGearApp(MDApp):
         self._scan_busy = False
         self._pause_camera_mode = None
         self.filters = {"search": "", "floor": "", "section": "", "sockets": "", "features": "",
-                        "sort": "number", "order": "asc", "date": dt.date.today().isoformat()}
+                        "sort": "number", "order": "asc", "date": dt.date.today().isoformat(),
+                        "start_time": "09:00", "end_time": "17:00"}
         self.desk_offset, self.map_mode = 0, False
         self.root_screen = MDScreen(md_bg_color=BACKGROUND)
         self.shell = MDBoxLayout(orientation="vertical", padding=(dp(16), dp(10)), spacing=dp(5), opacity=0)
@@ -158,7 +159,7 @@ class OfficeDeskGearApp(MDApp):
         self.pages = PageHost()
         self.shell.add_widget(self.pages)
         self.navigation = MDBoxLayout(size_hint_y=None, height=0, spacing=dp(3),
-                                       padding=dp(4), md_bg_color=SURFACE, radius=[dp(18)])
+                                       padding=dp(4), md_bg_color=SURFACE, radius=[dp(12)])
         self.nav_items = {}
         for name, title, icon, method in (
                 ("home", "Главная", "home-outline", self.home),
@@ -296,9 +297,10 @@ class OfficeDeskGearApp(MDApp):
                             theme_font_size="Custom", font_size=sp(11 if compact else 14))
         children = [text]
         if icon:
-            children.insert(0, MDButtonIcon(icon=icon, theme_icon_color="Custom", icon_color=ACCENT))
+            children.insert(0, MDButtonIcon(icon=icon, theme_icon_color="Custom",
+                                            icon_color=BACKGROUND if primary else ACCENT))
         item = MDButton(*children, style="filled" if primary else "text", theme_width="Custom",
-                        size_hint=(1, None), height=dp(44 if compact else 50), radius=[dp(12)],
+                        size_hint=(1, None), height=dp(44 if compact else 50), radius=[dp(10)],
                         theme_bg_color="Custom", md_bg_color=ACCENT if primary else SURFACE)
         def released(*_):
             if self.busy:
@@ -319,7 +321,7 @@ class OfficeDeskGearApp(MDApp):
                            text=str(value or ""), mode="outlined", size_hint_y=None, height=dp(110 if multiline else 58),
                            radius=[dp(10)], multiline=multiline, write_tab=False, password=secret,
                            input_type="mail" if kind == "email" else "number" if kind == "int" else "text",
-                           keyboard_suggestions=not secret and kind not in {"email", "int", "datetime", "date"},
+                           keyboard_suggestions=not secret and kind not in {"email", "int", "datetime", "date", "time"},
                            theme_text_color="Custom", text_color_normal=TEXT, text_color_focus=TEXT,
                            theme_line_color="Custom", line_color_normal=BORDER, line_color_focus=ACCENT, error_color=ERROR)
         item._required, item._kind, item._title = required, kind, title
@@ -378,6 +380,10 @@ class OfficeDeskGearApp(MDApp):
                     value = dt.datetime.fromisoformat(value).isoformat(timespec="seconds")
                 if field._kind == "date":
                     value = dt.date.fromisoformat(value).isoformat()
+                if field._kind == "time":
+                    if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) is None:
+                        raise ValueError(f"«{field._title}»: укажите время от 00:00 до 23:59")
+                    value = dt.time.fromisoformat(value).strftime("%H:%M")
                 result[key] = value
             return result
         except (ValueError, TypeError) as error:
@@ -757,26 +763,72 @@ class OfficeDeskGearApp(MDApp):
         self.mutate(request, saved)
 
     def desks(self, booking_notice=None, interval=None):
-        self.page_start("desks", "Рабочие места", "Найдите удобный стол и выберите время бронирования.")
+        if interval:
+            start, end = interval
+            self.filters.update(date=start.date().isoformat(), start_time=start.strftime("%H:%M"),
+                                end_time=end.strftime("%H:%M"))
+            if end.date() != start.date():
+                self.filters["end_date"] = end.date().isoformat()
+            else:
+                self.filters.pop("end_date", None)
+        self.page_start("desks", "Рабочие места", "Выберите день и время, когда планируете работать в офисе.")
         if booking_notice:
             self.text("Бронирование не выполнено: " + booking_notice, ERROR)
-        search = self.field("Поиск стола на сервере", self.filters["search"])
+        search = self.field("Поиск по номеру стола", self.filters["search"])
         date = self.field("Дата · ГГГГ-ММ-ДД", self.filters["date"], kind="date", required=True)
-        self.action("Поиск и обновление", lambda: self._desk_search(search, date), True)
-        self.action("Параметры фильтра и сортировки", self.desk_filters)
-        self.action("Показать списком" if self.map_mode else "Показать план этажа", self._toggle_map)
+        times = MDBoxLayout(size_hint_y=None, height=dp(58), spacing=dp(12))
+        self.body.add_widget(times)
+        start_time = self.field("С · ЧЧ:ММ", self.filters.get("start_time", "09:00"),
+                                kind="time", required=True, target=times)
+        end_time = self.field("До · ЧЧ:ММ", self.filters.get("end_time", "17:00"),
+                              kind="time", required=True, target=times)
+        end_date = (self.field("Дата окончания · ГГГГ-ММ-ДД", self.filters["end_date"], kind="date", required=True)
+                    if "end_date" in self.filters else None)
+        self.text("Время офиса", MUTED, size=12)
+        self.action("Найти места", lambda: self._desk_search(search, date, start_time, end_time, end_date), True)
+        controls = MDBoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        controls.add_widget(self.button("Фильтры", self.desk_filters, compact=True, icon="tune-variant"))
+        controls.add_widget(self.button("Список" if self.map_mode else "План этажа", self._toggle_map,
+                                        compact=True, icon="format-list-bulleted" if self.map_mode else "floor-plan"))
+        self.body.add_widget(controls)
         self.desk_results = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(12))
         self.body.add_widget(self.desk_results)
-        self.action("Предыдущие 20", lambda: self._desk_page(-20))
-        self.action("Следующие 20", lambda: self._desk_page(20))
-        self._load_desks(interval=interval)
+        pages = MDBoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        pages.add_widget(self.button("Предыдущие 20", lambda: self._desk_page(-20), compact=True))
+        pages.add_widget(self.button("Следующие 20", lambda: self._desk_page(20), compact=True))
+        self.body.add_widget(pages)
+        self._load_desks()
 
-    def _desk_search(self, search, date):
-        values = self.values({"date": date})
-        if values:
-            self.filters.update(search=search.text.strip(), date=values["date"])
-            self.desk_offset = 0
-            self.desks()
+    def _desk_search(self, search, date, start_time, end_time, end_date=None):
+        fields = {"date": date, "start_time": start_time, "end_time": end_time}
+        if end_date is not None:
+            fields["end_date"] = end_date
+        values = self.values(fields)
+        if not values:
+            return
+        start, end = self._desk_interval(values)
+        if end <= start:
+            start_time.error = end_time.error = True
+            end_time.focus = True
+            self.note("Время окончания должно быть позже времени начала", error=True)
+            return
+        if end - start > dt.timedelta(hours=24):
+            field = end_date if end_date is not None else end_time
+            field.error, field.focus = True, True
+            self.note("Выберите промежуток не более 24 часов", error=True)
+            return
+        if values.get("end_date") == values["date"]:
+            values.pop("end_date")
+        self.filters.pop("end_date", None)
+        self.filters.update(search=search.text.strip(), **values)
+        self.desk_offset = 0
+        self.desks()
+
+    def _desk_interval(self, filters=None):
+        filters = self.filters if filters is None else filters
+        start = dt.datetime.fromisoformat(filters["date"] + "T" + filters.get("start_time", "09:00"))
+        end = dt.datetime.fromisoformat(filters.get("end_date", filters["date"]) + "T" + filters.get("end_time", "17:00"))
+        return start, end
 
     def _toggle_map(self):
         self.map_mode = not self.map_mode
@@ -789,13 +841,12 @@ class OfficeDeskGearApp(MDApp):
         self.desk_offset = max(0, self.desk_offset + delta)
         self.desks()
 
-    def _load_desks(self, interval=None):
+    def _load_desks(self):
         filters = self.filters.copy()
         args = {k: int(filters[k]) if filters[k] else None for k in ("floor", "section", "sockets")}
         args.update(search=filters["search"] or None, sort=filters["sort"], order=filters["order"],
                     features=[int(v) for v in filters["features"].split(",") if v.strip()], limit=20, offset=self.desk_offset)
-        day = dt.date.fromisoformat(filters["date"])
-        start_at, end_at = interval or (dt.datetime.combine(day, dt.time(9)), dt.datetime.combine(day, dt.time(17)))
+        start_at, end_at = self._desk_interval(filters)
         args.update(start_at=start_at.isoformat(), end_at=end_at.isoformat())
         key = "desks:" + repr(sorted(args.items())) + filters["date"]
 
@@ -813,10 +864,13 @@ class OfficeDeskGearApp(MDApp):
         self.text("Записи " + str(self.desk_offset + 1) + "–" + str(self.desk_offset + len(desks)) if desks else "Столы не найдены", MUTED, target=self.desk_results)
         interval_label = data.get("interval_label", "09:00–17:00")
         self.text("Доступность за " + interval_label, MUTED, target=self.desk_results)
+        legend = MDBoxLayout(size_hint_y=None, height=dp(32), spacing=dp(12))
+        self.text("Свободен", SUCCESS, target=legend, size=12)
+        self.text("Занят", ERROR, target=legend, size=12)
+        self.desk_results.add_widget(legend)
         if data.get("partial") == "true":
             self.text("Точных совпадений нет. Показаны близкие варианты", ACCENT, target=self.desk_results)
         if self.map_mode:
-            self.text("План по этажам и секциям · голубой — доступен, красный — недоступен", MUTED, target=self.desk_results)
             groups = {}
             for desk in desks:
                 groups.setdefault((desk.get("floor"), desk.get("section")), []).append(desk)
@@ -825,22 +879,34 @@ class OfficeDeskGearApp(MDApp):
                 grid = MDGridLayout(cols=2, adaptive_height=True, spacing=dp(8))
                 self.desk_results.add_widget(grid)
                 for desk in items:
-                    busy = sum(1 for b in bookings if b["desk_id"] == desk["id"] and not b.get("is_cancelled"))
-                    title = f"Стол {desk['number']}\n" + ("Занят / закрыт" if not desk["is_free"] else "Свободен")
+                    _, color, availability = self._desk_status(desk)
+                    title = f"Стол {desk['number']}\n" + ("Свободен" if availability == "free" else "Занят" if availability == "occupied" else "Недоступен")
                     button = self.button(title, partial(self.desk_detail, desk))
                     button.height = dp(80)
-                    if not desk["is_free"]:
-                        button.children[0].text_color = ERROR
+                    button.md_bg_color = (*color[:3], 0.10)
+                    button._desk_id, button._availability = desk["id"], availability
+                    next(w for w in button.children if isinstance(w, MDButtonText)).text_color = color
                     grid.add_widget(button)
         else:
             for desk in desks:
                 busy = sum(1 for b in bookings if b["desk_id"] == desk["id"] and not b.get("is_cancelled"))
                 box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8), padding=dp(14), md_bg_color=SURFACE, radius=[dp(12)])
+                status, color, availability = self._desk_status(desk)
+                box._desk_id, box._availability = desk["id"], availability
                 self.text(f"Стол {desk['number']} · этаж {desk.get('floor', '—')}", target=box, size=16)
+                self.text(status, color, target=box, size=13)
                 self.text(f"Секция {desk.get('section', '—')} · розеток {desk.get('sockets', 0)}\n" +
-                          ("Свободен в выбранное время" if desk["is_free"] else "Занят в выбранное время" if desk.get("is_operational", True) else "Вне эксплуатации") + (f" · броней за день: {busy}" if busy else ""), MUTED, target=box)
+                          (f"Броней за день: {busy}" if busy else "Бронирований на этот день нет"), MUTED, target=box, size=13)
                 self.action("Подробнее и забронировать", partial(self.desk_detail, desk), target=box)
                 self.desk_results.add_widget(box)
+
+    @staticmethod
+    def _desk_status(desk):
+        if not desk.get("is_operational", True):
+            return "Вне эксплуатации", ERROR, "unavailable"
+        if desk["is_free"]:
+            return "Свободен в выбранное время", SUCCESS, "free"
+        return "Занят в выбранное время", ERROR, "occupied"
 
     def desk_filters(self):
         self.page_start("filters", "Фильтры столов")
@@ -875,10 +941,13 @@ class OfficeDeskGearApp(MDApp):
     def desk_detail(self, desk):
         self.page_start("desk", f"Стол {desk['number']}", f"Этаж {desk.get('floor', '—')} · секция {desk.get('section', '—')}")
         features_text = self.text(f"Розеток: {desk.get('sockets', 0)}")
-        self.text("Доступен для бронирования" if desk["is_free"] else "Есть брони в выбранное время" if desk.get("is_operational", True) else "Место выведено из эксплуатации", SUCCESS if desk["is_free"] else ERROR)
+        status, color, _ = self._desk_status(desk)
+        self.text(status, color)
+        start, end = self._desk_interval()
+        self.text(f"{moment(start)} — {moment(end)}", MUTED, size=13)
         availability = self.text("Расписание загружается…", MUTED)
         if desk.get("is_operational", desk["is_free"]):
-            self.action("Забронировать на день", lambda: self.booking_form(desk), True)
+            self.action("Забронировать на это время", lambda: self.booking_form(desk), True)
             self.action("Забронировать на период", lambda: self.booking_form(desk, period=True))
         if self.user.get("role") in {"it_admin", "office_manager"}:
             self.action("Редактировать стол", lambda: self.desk_form(desk))
@@ -897,10 +966,29 @@ class OfficeDeskGearApp(MDApp):
     def booking_form(self, desk, period=False, booking=None):
         self.page_start("booking_form", "Изменить бронь" if booking else "Бронь на период" if period else "Бронь на день",
                         f"Стол {desk['number']} · время офиса, формат ГГГГ-ММ-ДД ЧЧ:ММ")
-        default = self.filters["date"] + " 09:00"
+        start, end = self._desk_interval()
+        default = start.isoformat(sep=" ", timespec="minutes")
+        hours = min(24, max(1, math.ceil((end - start).total_seconds() / 3600)))
         fields = {"start": self.field("Дата и время начала", booking.get("planed_at", default) if booking else default,
                                       required=True, kind="datetime"),
-                  "duration": self.field("Часов в день · 1–24", str(int(booking["duration"].split(":")[0])) if booking else "8", required=True, kind="int")}
+                  "duration": self.field("Часов в день · 1–24", str(int(booking["duration"].split(":")[0])) if booking else str(hours), required=True, kind="int")}
+        if not booking and (end - start).total_seconds() % 3600:
+            self.text("Бронирование — целыми часами. Длительность округлена вверх; её можно изменить.", MUTED, size=13)
+        ending = self.text("", MUTED, size=13)
+
+        def show_ending(*_):
+            try:
+                starts_at = dt.datetime.fromisoformat(fields["start"].text.strip())
+                duration = int(fields["duration"].text.strip())
+                if not 1 <= duration <= 24:
+                    raise ValueError()
+                ending.text = ("Окончание первого дня: " if period else "Окончание: ") + moment(starts_at + dt.timedelta(hours=duration))
+            except (ValueError, OverflowError):
+                ending.text = "Укажите начало и длительность, чтобы увидеть время окончания"
+
+        fields["start"].bind(text=show_ending)
+        fields["duration"].bind(text=show_ending)
+        show_ending()
         if period:
             fields["end"] = self.field("Конец периода · ГГГГ-ММ-ДД", self.filters["date"], required=True, kind="date")
         self.action("Сохранить бронь", lambda: self._booking_save(desk, fields, period, booking), True)

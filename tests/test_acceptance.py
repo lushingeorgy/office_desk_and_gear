@@ -721,6 +721,66 @@ class PostgreSQLAcceptance(unittest.TestCase):
         selected = next(item for item in self.items(results) if item["id"] == desk["id"])
         self.assertFalse(selected["is_free"])
 
+    def test_24c_desk_search_uses_selected_interval_and_booking_boundaries(self):
+        from zoneinfo import ZoneInfo
+
+        desk = self.create_desk()
+        start = (dt.datetime.now() + dt.timedelta(days=69)).replace(hour=10, minute=0, second=0, microsecond=0)
+        booking = self.request("POST", "/bookings", 201, role="other", payload={
+            "desk_id": desk["id"], "planed_at": start.isoformat(), "duration_hours": 2,
+        })
+
+        def selected(begin, end, **filters):
+            params = {"floor": desk["floor"], "search": str(desk["number"]),
+                      "start_at": begin.isoformat(), "end_at": end.isoformat(), **filters}
+            result = self.request("GET", "/desks", params=params)
+            return next(item for item in self.items(result) if item["id"] == desk["id"])
+
+        # Touching the beginning/end is allowed; any positive overlap is busy.
+        for begin, end, free in (
+            (start - dt.timedelta(hours=1), start, True),
+            (start - dt.timedelta(minutes=1), start + dt.timedelta(minutes=1), False),
+            (start + dt.timedelta(minutes=30), start + dt.timedelta(hours=1), False),
+            (start - dt.timedelta(hours=1), start + dt.timedelta(hours=3), False),
+            (start + dt.timedelta(hours=2), start + dt.timedelta(hours=3), True),
+            (start + dt.timedelta(days=1), start + dt.timedelta(days=1, hours=1), True),
+        ):
+            with self.subTest(begin=begin, end=end):
+                item = selected(begin, end)
+                self.assertEqual(free, item["is_free"])
+                self.assertTrue(item["is_operational"])
+
+        # Offset-aware search uses the same office wall-time contract as booking.
+        utc_start = start.replace(tzinfo=ZoneInfo(self.settings.OFFICE_TIMEZONE)).astimezone(dt.UTC)
+        self.assertFalse(selected(utc_start, utc_start + dt.timedelta(hours=1))["is_free"])
+        # Relaxing sockets must keep the requested availability interval.
+        self.assertFalse(selected(start, start + dt.timedelta(hours=1), sockets=999)["is_free"])
+
+        self.request("DELETE", f"/bookings/{booking['id']}", 204, role="other")
+        self.assertTrue(selected(start, start + dt.timedelta(hours=1))["is_free"])
+        self.request("PATCH", f"/admin/desks/{desk['id']}", role="office_manager", payload={"is_free": False})
+        unavailable = selected(start, start + dt.timedelta(hours=1))
+        self.assertFalse(unavailable["is_free"])
+        self.assertFalse(unavailable["is_operational"])
+
+    def test_24d_desk_search_rejects_incomplete_or_invalid_intervals(self):
+        start = (dt.datetime.now() + dt.timedelta(days=70)).replace(hour=10, minute=0, second=0, microsecond=0)
+        end = start + dt.timedelta(hours=1)
+        invalid = (
+            {"start_at": start.isoformat()},
+            {"end_at": end.isoformat()},
+            {"start_at": start.isoformat(), "end_at": start.isoformat()},
+            {"start_at": end.isoformat(), "end_at": start.isoformat()},
+            {"start_at": "2026-11-07T25:00:00", "end_at": end.isoformat()},
+            {"start_at": "invalid", "end_at": end.isoformat()},
+            # These look ordered as wall times but represent the same instant.
+            {"start_at": start.replace(tzinfo=dt.UTC).isoformat(),
+             "end_at": (start + dt.timedelta(hours=1)).replace(tzinfo=dt.timezone(dt.timedelta(hours=1))).isoformat()},
+        )
+        for params in invalid:
+            with self.subTest(params=params):
+                self.request("GET", "/desks", 422, params=params)
+
     def test_25_changed_email_requires_confirmation_before_next_login(self):
         new_email = f"changed-{uuid.uuid4().hex}@company.ru"
         updated = self.request("PATCH", "/users/me", payload={"email": new_email})
