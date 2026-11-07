@@ -14,13 +14,13 @@ from kivy.core.window import Window
 from kivy.metrics import dp
 from kivymd.app import MDApp
 from client.registration import BACKGROUND
+from client.theme import configure_theme
 from client.ui import StartupScreen
 
 
 class PresplashRenderer(MDApp):
     def build(self):
-        self.theme_cls.theme_style_switch_animation = False
-        self.theme_cls.theme_style = "Dark"
+        configure_theme(self.theme_cls)
         Window.size = (dp(360), dp(640))
         Window.clearcolor = BACKGROUND
         return StartupScreen()

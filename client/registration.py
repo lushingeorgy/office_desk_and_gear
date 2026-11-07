@@ -5,7 +5,7 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.metrics import dp, sp
 from kivy.uix.anchorlayout import AnchorLayout
-from kivy.utils import get_color_from_hex, platform
+from kivy.utils import platform
 from kivymd.app import MDApp
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDButton, MDButtonIcon, MDButtonText
@@ -16,15 +16,7 @@ from kivymd.uix.scrollview import MDScrollView
 from kivymd.uix.textfield import MDTextField, MDTextFieldHintText, MDTextFieldTrailingIcon
 
 from client.services.api_client import ApiClient, ApiError
-
-BACKGROUND = get_color_from_hex("#0C1017")
-SURFACE = get_color_from_hex("#172234")
-BORDER = get_color_from_hex("#3C4A60")
-TEXT = get_color_from_hex("#EEF2F8")
-MUTED = get_color_from_hex("#9CAAC0")
-ACCENT = get_color_from_hex("#8BADFF")
-ERROR = get_color_from_hex("#F1959B")
-SUCCESS = get_color_from_hex("#88CCAC")
+from client.theme import ACCENT, BACKGROUND, BORDER, ERROR, MUTED, SUCCESS, SURFACE, TEXT, configure_theme
 JOB_ROLES = {
     "Сотрудник": "employee",
     "Офис-менеджер": "office_manager",
@@ -64,9 +56,8 @@ class RegistrationScreen(MDScreen):
         brand.add_widget(brand_text)
         self.form.add_widget(brand)
         self.form.add_widget(MDBoxLayout(size_hint_y=None, height=dp(24)))
-        self.form.add_widget(label("РЕГИСТРАЦИЯ СОТРУДНИКА", 18, 11, ACCENT))
         self.form.add_widget(label("Создать аккаунт", 44, 28))
-        self.form.add_widget(label("Заполните данные рабочего профиля.", 40, 14, MUTED))
+        self.form.add_widget(label("Представьтесь, чтобы бронировать места в офисе.", 44, 14, MUTED))
         self.form.add_widget(MDBoxLayout(size_hint_y=None, height=dp(12)))
 
         fields_box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(20))
@@ -257,8 +248,7 @@ class OfficeDeskGearApp(MDApp):
     title = "Office Desk & Gear"
 
     def build(self):
-        self.theme_cls.theme_style = "Dark"
-        self.theme_cls.primary_palette = "Blue"
+        configure_theme(self.theme_cls)
         Window.clearcolor = BACKGROUND
 
         Window.softinput_mode = "below_target"

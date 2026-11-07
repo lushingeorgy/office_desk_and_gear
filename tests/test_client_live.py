@@ -265,12 +265,38 @@ def gui_main(restored=False):
 
         def lookup_desk():
             data["desk"] = app.api.get_desks(search="701")[0]
+            data["booking_day"] = (dt.date.today() + dt.timedelta(days=2)).isoformat()
+            app.desks()
+        stage("find the created desk in the search screen", lookup_desk)
+
+        def search_interval(start, end):
+            field("Поиск по номеру стола").text = "701"
+            field("Дата · ГГГГ-ММ-ДД").text = data["booking_day"]
+            field("С · ЧЧ:ММ").text = start
+            field("До · ЧЧ:ММ").text = end
+            app._desk_search(field("Поиск по номеру стола"), field("Дата · ГГГГ-ММ-ДД"),
+                             field("С · ЧЧ:ММ"), field("До · ЧЧ:ММ"))
+
+        def search_status(expected):
+            expect_page("desks")
+            item = next(widget for widget in app.desk_results.walk()
+                        if getattr(widget, "_desk_id", None) == data["desk"]["id"])
+            assert item._availability == expected, (expected, item._availability)
+
+        stage("search exact office hours through the real API", lambda: search_interval("10:30", "12:00"),
+              lambda: search_status("free"))
+
+        def inherited_booking_form():
             app.booking_form(data["desk"])
-        stage("booking form", lookup_desk)
+            assert field("Дата и время начала").text == data["booking_day"] + " 10:30"
+            assert field("Часов в день · 1–24").text == "2"
+            text = "\n".join(getattr(widget, "text", "") for widget in app.body.walk())
+            assert "12:30" in text, text
+        stage("booking form inherits selected hours and explains whole-hour duration", inherited_booking_form)
 
         def create_booking():
-            start = (dt.date.today() + dt.timedelta(days=2)).isoformat() + " 09:00"
-            fs = fields({"start": "Дата и время начала", "duration": "Часов в день · 1–24"}, {"start": start, "duration": 8})
+            start = data["booking_day"] + " 10:30"
+            fs = fields({"start": "Дата и время начала", "duration": "Часов в день · 1–24"}, {"start": start, "duration": 2})
             app._booking_save(data["desk"], fs, False, None)
         def booking_list_place():
             expect_page("bookings")
@@ -279,6 +305,12 @@ def gui_main(restored=False):
             assert "Стол №701" in text and "этаж 7" in text, text
             assert f"Стол #{data['desk']['id']}" not in text, text
         stage("create booking through UI", create_booking, booking_list_place)
+
+        stage("booked desk is occupied during selected hours", app.desks, lambda: search_status("occupied"))
+        stage("same desk is free exactly at the booking end", lambda: search_interval("12:30", "13:30"),
+              lambda: search_status("free"))
+        stage("return to the booked interval", lambda: search_interval("10:30", "12:00"),
+              lambda: search_status("occupied"))
 
         stage("reopen the same booking interval", lambda: app.booking_form(data["desk"]))
 
@@ -300,7 +332,7 @@ def gui_main(restored=False):
             expect_page("desks")
             text = "\n".join(str(getattr(widget, "text", "")) for widget in app.body.walk())
             assert "Бронирование не выполнено" in text and "Выбранное время уже занято" in text, text
-            assert "Стол 701\nЗанят / закрыт" in text, text
+            assert "Стол 701\nЗанят" in text, text
             requests = data["conflict_requests"]
             conflict = next(index for index, row in enumerate(requests) if row[0] == "POST" and row[2] == 409)
             assert any(row[0] == "GET" and "/desks" in row[1] for row in requests[conflict + 1:]), requests

@@ -187,7 +187,7 @@ class RemoteSuite(NativeSmoke):
             'Подтвердить почту':['Код подтверждения'],
             'Восстановить пароль':['Рабочая почта','Код из письма','Новый пароль от 6 символов','Повторите новый пароль'],
             'Мой профиль':['ФИО','Рабочая почта','Должность','Телефон','Фото профиля'],
-            'Рабочие места':['Поиск стола на сервере','Дата'],
+            'Рабочие места':['Поиск по номеру стола','Дата'],
             'Фильтры столов':['Этаж','Секция','Минимум розеток','Сортировать по','Порядок'],
             'Новое рабочее место':['Номер стола','Этаж','Секция','Число розеток','Доступность'],
             'Изменить рабочее место':['Номер стола','Этаж','Секция','Число розеток','Доступность'],
@@ -298,7 +298,7 @@ class RemoteSuite(NativeSmoke):
             self.find('Записи 1',scroll=True)
             self.find('Доступность за '+start.strftime('%d.%m %H:%M'),scroll=True)
             self.screenshot('home-map-after-page-two')
-            self.top();self.click('Параметры фильтра и сортировки',scroll=True)
+            self.top();self.click('Фильтры',scroll=True)
             excluded=next(x for x in features if x['id'] not in desk['features'])
             x,y=self.find(excluded['name'],scroll=True)
             adb('shell','input','tap',36,y);time.sleep(.5)
@@ -346,8 +346,8 @@ class RemoteSuite(NativeSmoke):
 
     def desk_search(self,number):
         self.click('Столы')
-        self.fill('Поиск стола на сервере',str(number))
-        self.top(); self.click('Поиск и обновление')
+        self.fill('Поиск по номеру стола',str(number))
+        self.top(); self.click('Найти места')
         self.find('Стол '+str(number),scroll=True)
         self.click('Подробнее и забронировать',scroll=True)
         self.find('Розеток')
@@ -418,16 +418,16 @@ class RemoteSuite(NativeSmoke):
 
     def desk_views(self):
         self.click('Столы'); self.find('Рабочие места')
-        self.top(); self.click('Показать план этажа')
-        self.find('Показать списком')
-        self.click('Показать списком')
+        self.top(); self.click('План этажа')
+        self.find('Список')
+        self.click('Список')
         self.find('Рабочие места')
-        self.top(); self.click('Параметры фильтра и сортировки')
+        self.top(); self.click('Фильтры')
         self.fill('Этаж','2')
         self.select('Сортировать по','Розеткам')
         self.select('Порядок','По убыванию')
         self.primary(); self.find('Рабочие места')
-        self.top(); self.click('Параметры фильтра и сортировки')
+        self.top(); self.click('Фильтры')
         self.press('Сбросить'); self.find('Рабочие места')
         self.bottom(); self.click('Следующие 20')
         self.find('Записи 21',scroll=True)
@@ -435,7 +435,7 @@ class RemoteSuite(NativeSmoke):
 
     def book(self,period=False):
         self.desk_search(self.number)
-        self.click('Забронировать на период' if period else 'Забронировать на день',scroll=True)
+        self.click('Забронировать на период' if period else 'Забронировать на это время',scroll=True)
         day=self.day+dt.timedelta(days=7) if period else self.day
         self.fill('Дата и время начала',day.isoformat()+'T09:00')
         self.fill('Часов в день','1')

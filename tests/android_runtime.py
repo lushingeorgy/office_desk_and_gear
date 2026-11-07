@@ -40,12 +40,14 @@ def normalized(value):
 
 
 def primary_button_bounds(picture):
-    """Locate the observed blue canvas button, without relying on its OCR."""
+    """Locate a white (or legacy blue) primary canvas button from pixels."""
     width, height = picture.size
     mask = bytearray(width * height)
     for index, (red, green, blue) in enumerate(picture.convert("RGB").getdata()):
-        mask[index] = (abs(red - 139) <= 45 and abs(green - 173) <= 45
-                       and abs(blue - 255) <= 45 and blue - red >= 40)
+        neutral = min(red, green, blue) >= 220 and max(red, green, blue) - min(red, green, blue) <= 12
+        legacy = (abs(red - 139) <= 45 and abs(green - 173) <= 45
+                  and abs(blue - 255) <= 45 and blue - red >= 40)
+        mask[index] = neutral or legacy
     candidates = []
     for start in range(len(mask)):
         if not mask[start]:
@@ -79,12 +81,13 @@ def primary_button_bounds(picture):
 
 
 def header_profile_point(picture):
-    """Locate the observed accent user icon in the top-right app header."""
+    """Locate the observed neutral/legacy user icon in the app header."""
     import cv2
     import numpy as np
     frame = np.asarray(picture.convert("RGB"))
     height, width = frame.shape[:2]
     mask = cv2.inRange(frame, np.array([105, 140, 215]), np.array([175, 210, 255]))
+    mask |= cv2.inRange(frame, np.array([220, 220, 220]), np.array([255, 255, 255]))
     mask[:, :int(width * .80)] = 0
     mask[:int(height * .035)] = 0
     mask[int(height * .16):] = 0
@@ -126,7 +129,7 @@ class NativeSmoke:
         output = []
         evidence = []
         # The same screen contains light text on dark cards and dark text on
-        # blue action buttons. A single inverted pass loses the latter.
+        # light action buttons. A single inverted pass loses the latter.
         for polarity, variant in (("normal", gray), ("inverted", ImageOps.invert(gray))):
             enlarged = variant.resize((gray.width * 2, gray.height * 2), Image.Resampling.LANCZOS)
             data = pytesseract.image_to_data(enlarged, lang="rus+eng", config="--psm 11", output_type=pytesseract.Output.DICT)
@@ -159,18 +162,20 @@ class NativeSmoke:
                         right, bottom = max(item[1] + item[3] for item in part), max(item[2] + item[4] for item in part)
                         output.append((text, (x + right) // 2, (y + bottom) // 2))
         # Canvas buttons and floating Material hints need their own segmentation;
-        # full-screen sparse OCR can discard dark text inside the blue action.
+        # full-screen sparse OCR can discard dark text inside the light action.
         import cv2
         import numpy as np
         frame=np.asarray(picture)
         blue=cv2.inRange(frame,np.array([94,128,210]),np.array([184,218,255]))
         blue[(frame[:,:,2].astype('int16')-frame[:,:,0])<40]=0
+        blue |= cv2.inRange(frame,np.array([220,220,220]),np.array([255,255,255]))
         count,_,stats,_=cv2.connectedComponentsWithStats(blue)
         regions=[]
         for x,y,width,height,area in stats[1:]:
             if width>=picture.width*.6 and 24<=height<=picture.height*.15 and area>=width*height*.55:
                 regions.append(('button',(x+8,y+4,x+width-8,y+height-4)))
         border=cv2.inRange(frame,np.array([35,43,58]),np.array([43,51,66]))
+        border |= cv2.inRange(frame,np.array([68,68,68]),np.array([76,76,76]))
         contours=cv2.findContours(border,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)[0]
         for contour in contours:
             x,y,width,height=cv2.boundingRect(contour)

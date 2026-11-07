@@ -7,10 +7,10 @@ source.include_exts = py,kv,png,jpg,jpeg,atlas,ttf,json
 source.include_patterns = client/*,main.py
 source.exclude_dirs = .git,.venv,.buildenv,.venv-build,.buildozer,bin,venv,server,migrations,tests,docs,deploy,scripts,db_backup,.clientdata,.github,p4a-recipes
 source.exclude_patterns = .env*,*.dump,*.log,*.db,*secret*,*token*
-version = 1.1.4
+version = 1.1.5
 icon.filename = %(source.dir)s/client/assets/icon.png
 presplash.filename = %(source.dir)s/client/assets/presplash.png
-android.presplash_color = #0C1017
+android.presplash_color = #121212
 requirements = python3==3.14.2,hostpython3==3.14.2,kivy==2.3.1,kivymd==2.0.0,pillow,requests,certifi,urllib3,idna,charset-normalizer,plyer==2.1.0,pyjnius,opencv,numpy,materialyoucolor==3.0.4,materialshapes==0.3,pycairo==1.28.0,asynckivy==0.6.4,asyncgui==0.6.3,exceptiongroup,android
 orientation = portrait
 fullscreen = 0
