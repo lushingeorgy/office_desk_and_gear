@@ -155,12 +155,18 @@ class ApiClient:
             "new_password": new_password,
         })
 
+    def change_password(self, current_password, new_password):
+        return self._request("POST", "/users/me/password", json={
+            "current_password": current_password,
+            "new_password": new_password,
+        })
+
     def get_me(self):
         return self._request("GET", "/users/me")
 
-    def update_me(self, full_name=None, email=None, job_title=None, phone=None, avatar_url=None):
+    def update_me(self, full_name=None, email=None, phone=None, avatar_url=None):
         body = {key: value for key, value in {
-            "full_name": full_name, "email": email, "job_title": job_title,
+            "full_name": full_name, "email": email,
             "phone": phone, "avatar_url": avatar_url,
         }.items() if value is not None}
         return self._request("PATCH", "/users/me", json=body)

@@ -21,6 +21,26 @@ class DeviceTools:
             request_permissions([Permission.CAMERA], lambda _p, grants:
                                 self.schedule(lambda _dt: callback(bool(grants) and all(grants))))
 
+    def camera_preview_rotation(self, index):
+        """Clockwise correction from sensor coordinates to the current display."""
+        if self.platform != "android":
+            return 0
+        try:
+            from jnius import autoclass
+            Camera = autoclass("android.hardware.Camera")
+            info = autoclass("android.hardware.Camera$CameraInfo")()
+            Camera.getCameraInfo(index, info)
+            activity = autoclass("org.kivy.android.PythonActivity").mActivity
+            display = activity.getWindowManager().getDefaultDisplay()
+            degrees = int(display.getRotation()) * 90
+            # https://developer.android.com/reference/android/hardware/Camera#setDisplayOrientation(int)
+            if info.facing == 1:
+                return (360 - (info.orientation + degrees) % 360) % 360
+            return (info.orientation - degrees + 360) % 360
+        except Exception:
+            LOG.warning("Camera orientation metadata unavailable; using portrait preview", exc_info=True)
+            return 90
+
     def choose_photo_android(self, callback, failure):
         from android import activity
         from jnius import autoclass

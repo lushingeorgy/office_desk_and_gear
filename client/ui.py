@@ -1,7 +1,7 @@
 """Persistent navigation and lightweight, frame-safe page transitions."""
 from kivy.animation import Animation
 from kivy.clock import Clock
-from kivy.graphics import Color, RoundedRectangle
+from kivy.graphics import Color, PopMatrix, PushMatrix, Rotate, RoundedRectangle
 from kivy.metrics import dp
 from kivy.properties import BooleanProperty, NumericProperty
 from kivy.uix.anchorlayout import AnchorLayout
@@ -17,13 +17,41 @@ from client.registration import ACCENT, BACKGROUND, MUTED, SURFACE, TEXT, label
 from client.theme import SURFACE_RAISED
 
 
+class CameraPreview(FloatLayout):
+    """Rotate the sensor image without stretching it or rotating the page."""
+
+    def __init__(self, camera, clockwise_rotation=0, **kwargs):
+        super().__init__(**kwargs)
+        self.camera = camera
+        self.clockwise_rotation = clockwise_rotation % 360
+        camera.size_hint = (None, None)
+        camera.fit_mode = "contain"
+        # Kivy's Android camera samples the sensor texture directly; its shader
+        # does not apply SurfaceTexture's display transform. Correct the image
+        # here, leaving the original pixels available to the QR decoder.
+        with camera.canvas.before:
+            PushMatrix()
+            self._rotation = Rotate(angle=-self.clockwise_rotation, origin=camera.center)
+        with camera.canvas.after:
+            PopMatrix()
+        self.add_widget(camera)
+        self.bind(pos=self._layout_camera, size=self._layout_camera)
+        self._layout_camera()
+
+    def _layout_camera(self, *_):
+        self.camera.size = ((self.height, self.width) if self.clockwise_rotation in {90, 270}
+                            else self.size)
+        self.camera.center = self.center
+        self._rotation.origin = self.center
+
+
 class NavigationItem(ButtonBehavior, MDBoxLayout):
     """A stable touch target with both an icon and a readable caption."""
 
     def __init__(self, title, icon, **kwargs):
-        super().__init__(orientation="vertical", padding=(0, dp(6)), spacing=dp(2),
+        super().__init__(orientation="vertical", padding=(0, dp(8)), spacing=dp(4),
                          radius=[dp(10)], **kwargs)
-        self.caption = label(title, 20, 11, MUTED)
+        self.caption = label(title, 24, 12, MUTED)
         self.caption.halign = "center"
         self.symbol = MDIcon(icon=icon, theme_icon_color="Custom", icon_color=MUTED)
         mark = AnchorLayout()
@@ -46,7 +74,7 @@ class PageView(ScrollView):
                          always_overscroll=False, **kwargs)
         self.anchor = AnchorLayout(anchor_y="top", padding=(dp(8), dp(12)), size_hint_y=None)
         self.body = MDBoxLayout(orientation="vertical", adaptive_height=True,
-                                spacing=dp(14), size_hint_x=None)
+                                spacing=dp(16), size_hint_x=None)
         self.anchor.add_widget(self.body)
         self.add_widget(self.anchor)
         self.body.bind(height=self.relayout)

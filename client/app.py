@@ -10,6 +10,7 @@ import os
 import re
 from functools import partial
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from kivy.animation import Animation
 from kivy.clock import Clock
@@ -36,7 +37,7 @@ from client.core.worker import BackgroundWorker
 from client.registration import ACCENT, BACKGROUND, BORDER, ERROR, MUTED, SUCCESS, SURFACE, TEXT, label
 from client.services.api_client import ApiClient, ApiError
 from client.theme import configure_theme
-from client.ui import LoadingLine, NavigationItem, PageHost, StartupScreen
+from client.ui import CameraPreview, LoadingLine, NavigationItem, PageHost, StartupScreen
 from client.viewmodels.session import SessionViewModel
 
 LOG = logging.getLogger(__name__)
@@ -77,12 +78,12 @@ class FeaturePicker(MDBoxLayout):
     def fill(self, items):
         self.clear_widgets()
         for feature in items:
-            row = MDBoxLayout(size_hint_y=None, height=dp(52), spacing=dp(8))
+            row = MDBoxLayout(size_hint_y=None, height=dp(60), spacing=dp(10))
             check = MDCheckbox(active=feature["id"] in self.selected, size_hint=(None, None), size=(dp(44), dp(44)),
                                pos_hint={"center_y": 0.5})
             check.bind(active=partial(self._changed, feature["id"]))
             row.add_widget(check)
-            row.add_widget(label(feature["name"], 52, 13))
+            row.add_widget(label(feature["name"], 60, 15))
             self.add_widget(row)
 
     def _changed(self, feature_id, _widget, active):
@@ -124,6 +125,7 @@ class OfficeDeskGearApp(MDApp):
         self._menus, self._events = [], []
         self._reveals = set()
         self.camera = None
+        self.camera_preview = None
         self._scan_busy = False
         self._pause_camera_mode = None
         self.filters = {"search": "", "floor": "", "section": "", "sockets": "", "features": "",
@@ -131,21 +133,24 @@ class OfficeDeskGearApp(MDApp):
                         "start_time": "09:00", "end_time": "17:00"}
         self.desk_offset, self.map_mode = 0, False
         self.root_screen = MDScreen(md_bg_color=BACKGROUND)
-        self.shell = MDBoxLayout(orientation="vertical", padding=(dp(16), dp(10)), spacing=dp(5), opacity=0)
+        self.shell = MDBoxLayout(orientation="vertical", padding=(dp(18), dp(12)), spacing=dp(8), opacity=0)
         self.root_screen.add_widget(self.shell)
-        header = MDBoxLayout(size_hint_y=None, height=dp(56), spacing=dp(8))
+        header = MDBoxLayout(size_hint_y=None, height=dp(64), spacing=dp(10))
         self.back_button = MDIconButton(icon="arrow-left", theme_icon_color="Custom", icon_color=ACCENT,
-                                        size_hint=(None, None), size=(dp(44), dp(44)),
+                                        size_hint=(None, None), size=(dp(52), dp(52)),
                                         pos_hint={"center_y": 0.5})
         self.back_button.bind(on_release=lambda *_: self._navigate(self._back))
         header.add_widget(self.back_button)
         brand = MDBoxLayout(orientation="vertical", padding=(0, dp(6)))
-        brand.add_widget(label("Office Desk & Gear", 24, 16))
-        brand.add_widget(label("Рабочее пространство", 20, 11, MUTED))
+        brand_title = label("Office Desk & Gear", 28, 18)
+        brand_title.shorten = True
+        brand_title.shorten_from = "right"
+        brand.add_widget(brand_title)
+        brand.add_widget(label("Рабочее пространство", 22, 12, MUTED))
         header.add_widget(brand)
         self.profile_button = MDIconButton(icon="account-outline", style="tonal", theme_icon_color="Custom",
                                            icon_color=ACCENT, theme_bg_color="Custom", md_bg_color=SURFACE,
-                                           size_hint=(None, None), size=(dp(48), dp(48)),
+                                           size_hint=(None, None), size=(dp(52), dp(52)),
                                            pos_hint={"center_y": 0.5})
         self.profile_button.bind(on_release=lambda *_: self._navigate(self.profile, "profile"))
         header.add_widget(self.profile_button)
@@ -158,8 +163,8 @@ class OfficeDeskGearApp(MDApp):
         self.shell.add_widget(self.status)
         self.pages = PageHost()
         self.shell.add_widget(self.pages)
-        self.navigation = MDBoxLayout(size_hint_y=None, height=0, spacing=dp(3),
-                                       padding=dp(4), md_bg_color=SURFACE, radius=[dp(12)])
+        self.navigation = MDBoxLayout(size_hint_y=None, height=0, spacing=dp(4),
+                                       padding=dp(5), md_bg_color=SURFACE, radius=[dp(14)])
         self.nav_items = {}
         for name, title, icon, method in (
                 ("home", "Главная", "home-outline", self.home),
@@ -254,7 +259,7 @@ class OfficeDeskGearApp(MDApp):
             self.pages.clear()
         self.scroll = self.pages.stage()
         self.body, self.anchor = self.scroll.body, self.scroll.anchor
-        self.navigation.height = dp(72) if self.user else 0
+        self.navigation.height = dp(82) if self.user else 0
         self.navigation.opacity = 1 if self.user else 0
         self.navigation.disabled = not bool(self.user)
         self.profile_button.opacity = 1 if self.user else 0
@@ -265,7 +270,7 @@ class OfficeDeskGearApp(MDApp):
         for key, item in self.nav_items.items():
             item.select(bool(self.user) and name != "profile" and key == self._section)
         self.note("")
-        self.text(title, size=26)
+        self.text(title, size=28)
         if subtitle:
             self.text(subtitle, MUTED)
 
@@ -286,22 +291,31 @@ class OfficeDeskGearApp(MDApp):
             {"home": self.home, "desks": self.desks, "bookings": self.bookings,
              "equipment": self.equipment, "tickets": self.tickets}[self._section]()
 
-    def text(self, value, color=TEXT, target=None, size=14):
-        item = label(str(value), 32, size, color)
-        item.bind(texture_size=lambda w, v: setattr(w, "height", max(dp(28), v[1] + dp(8))))
+    def text(self, value, color=TEXT, target=None, size=16):
+        item = label(str(value), 38, size, color)
+        item.bind(texture_size=lambda w, v: setattr(w, "height", max(dp(34), v[1] + dp(10))))
         (target or self.body).add_widget(item)
         return item
 
     def button(self, title, action, primary=False, compact=False, icon=None):
         text = MDButtonText(text=title, theme_text_color="Custom", text_color=BACKGROUND if primary else ACCENT,
-                            theme_font_size="Custom", font_size=sp(11 if compact else 14))
+                            theme_font_size="Custom", font_size=sp(12 if compact else 16))
         children = [text]
         if icon:
             children.insert(0, MDButtonIcon(icon=icon, theme_icon_color="Custom",
                                             icon_color=BACKGROUND if primary else ACCENT))
         item = MDButton(*children, style="filled" if primary else "text", theme_width="Custom",
-                        size_hint=(1, None), height=dp(44 if compact else 50), radius=[dp(10)],
+                        size_hint=(1, None), height=dp(50 if compact else 58), radius=[dp(12)],
                         theme_bg_color="Custom", md_bg_color=ACCENT if primary else SURFACE)
+        text.adaptive_size = False
+        def fit_caption(*_):
+            text.width = max(dp(1), item.width - dp(76 if icon else 48))
+        item.bind(width=fit_caption)
+        if compact:
+            text.shorten, text.max_lines = True, 1
+        else:
+            text.bind(texture_size=lambda _w, size: setattr(item, "height", max(dp(58), size[1] + dp(24))))
+        fit_caption()
         def released(*_):
             if self.busy:
                 self.note("Дождитесь завершения текущего запроса")
@@ -318,8 +332,8 @@ class OfficeDeskGearApp(MDApp):
     def field(self, title, value="", *, secret=False, required=False, kind="text", target=None, multiline=False):
         item = MDTextField(MDTextFieldHintText(text=title + (" *" if required else ""), text_color_normal=MUTED,
                                              text_color_focus=ACCENT),
-                           text=str(value or ""), mode="outlined", size_hint_y=None, height=dp(110 if multiline else 58),
-                           radius=[dp(10)], multiline=multiline, write_tab=False, password=secret,
+                           text=str(value or ""), mode="outlined", size_hint_y=None, height=dp(124 if multiline else 66),
+                           radius=[dp(12)], multiline=multiline, write_tab=False, password=secret,
                            input_type="mail" if kind == "email" else "number" if kind == "int" else "text",
                            keyboard_suggestions=not secret and kind not in {"email", "int", "datetime", "date", "time"},
                            theme_text_color="Custom", text_color_normal=TEXT, text_color_focus=TEXT,
@@ -398,7 +412,7 @@ class OfficeDeskGearApp(MDApp):
         field.readonly, field.keyboard_mode = True, "managed"
         field._choice = value if value in options else next(iter(options))
         menu = MDDropdownMenu(caller=field, position="bottom", md_bg_color=SURFACE,
-                              items=[{"text": text_, "height": dp(48), "on_release":
+                              items=[{"text": text_, "height": dp(56), "on_release":
                                       partial(self._choose, field, key, text_)} for key, text_ in options.items()])
         field._menu = menu
         field.bind(on_touch_down=lambda w, touch: self._choice_touch(w, touch, menu))
@@ -420,11 +434,11 @@ class OfficeDeskGearApp(MDApp):
         field._menu.dismiss()
 
     def card(self, title, description="", action=None):
-        box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(6), padding=dp(16),
-                          md_bg_color=SURFACE, radius=[dp(14)])
-        self.text(title, target=box, size=16)
+        box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8), padding=dp(18),
+                          md_bg_color=SURFACE, radius=[dp(16)])
+        self.text(title, target=box, size=18)
         if description:
-            self.text(description, MUTED, target=box, size=13)
+            self.text(description, MUTED, target=box, size=15)
         if action:
             self.action("Открыть", action, target=box)
         self.body.add_widget(box)
@@ -646,6 +660,27 @@ class OfficeDeskGearApp(MDApp):
         self.login()
         self.note("Пароль изменён. Войдите с новым паролем", success=True)
 
+    def _change_password(self, fields):
+        values = self.values(fields)
+        if not values:
+            return
+        if len(values["new_password"]) < 6:
+            fields["new_password"].error = True
+            self.note("Новый пароль должен содержать не менее 6 символов", error=True)
+            return
+        if values["new_password"] != values["confirm_password"]:
+            fields["confirm_password"].error = True
+            self.note("Новые пароли не совпадают", error=True)
+            return
+        self.job(lambda: self.api.change_password(values["current_password"], values["new_password"]),
+                 lambda _result: self._password_changed(), "Меняем пароль…", exclusive=True)
+
+    def _password_changed(self):
+        self.model.forget()
+        self.user = None
+        self.login()
+        self.note("Пароль изменён. Войдите с новым паролем", success=True)
+
     def home(self):
         self.page_start("home", "Рабочее пространство", self.user.get("full_name", "") + " · " + ROLES.get(self.user.get("role"), "Сотрудник"))
         content = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(12),
@@ -722,10 +757,10 @@ class OfficeDeskGearApp(MDApp):
         self.job(request, done, "Выходим…", exclusive=True)
 
     def profile(self):
-        self.page_start("profile", "Мой профиль", ROLES.get(self.user.get("role"), "Сотрудник"))
+        self.page_start("profile", "Мой профиль")
+        self.text("Должность: " + ROLES.get(self.user.get("role"), "Сотрудник"), ACCENT, size=16)
         fields = {"full_name": self.field("ФИО", self.user.get("full_name"), required=True),
                   "email": self.field("Рабочая почта", self.user.get("email"), required=True, kind="email"),
-                  "job_title": self.field("Должность", self.user.get("job_title"), required=True),
                   "phone": self.field("Телефон", self.user.get("phone"))}
         photo = self.field("Фото профиля", "Фото установлено" if self.user.get("avatar_url") else "")
         photo.readonly = True
@@ -734,6 +769,13 @@ class OfficeDeskGearApp(MDApp):
         self.action("Выбрать фото", lambda: self.choose_photo(lambda path: self._selected_photo(photo, path)))
         self.action("Сделать фото", lambda: self.camera_photo(lambda path: self._selected_photo(photo, path)))
         self.action("Сохранить профиль", lambda: self._profile_save(fields, photo), True)
+        self.text("Смена пароля", ACCENT, size=20)
+        password_fields = {
+            "current_password": self.field("Текущий пароль", secret=True, required=True),
+            "new_password": self.field("Новый пароль от 6 символов", secret=True, required=True),
+            "confirm_password": self.field("Повторите новый пароль", secret=True, required=True),
+        }
+        self.action("Изменить пароль", lambda: self._change_password(password_fields))
         self.action("Выйти из аккаунта", self.logout)
 
     def _profile_save(self, fields, photo):
@@ -776,7 +818,7 @@ class OfficeDeskGearApp(MDApp):
             self.text("Бронирование не выполнено: " + booking_notice, ERROR)
         search = self.field("Поиск по номеру стола", self.filters["search"])
         date = self.field("Дата · ГГГГ-ММ-ДД", self.filters["date"], kind="date", required=True)
-        times = MDBoxLayout(size_hint_y=None, height=dp(58), spacing=dp(12))
+        times = MDBoxLayout(size_hint_y=None, height=dp(66), spacing=dp(12))
         self.body.add_widget(times)
         start_time = self.field("С · ЧЧ:ММ", self.filters.get("start_time", "09:00"),
                                 kind="time", required=True, target=times)
@@ -786,14 +828,14 @@ class OfficeDeskGearApp(MDApp):
                     if "end_date" in self.filters else None)
         self.text("Время офиса", MUTED, size=12)
         self.action("Найти места", lambda: self._desk_search(search, date, start_time, end_time, end_date), True)
-        controls = MDBoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        controls = MDBoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
         controls.add_widget(self.button("Фильтры", self.desk_filters, compact=True, icon="tune-variant"))
         controls.add_widget(self.button("Список" if self.map_mode else "План этажа", self._toggle_map,
                                         compact=True, icon="format-list-bulleted" if self.map_mode else "floor-plan"))
         self.body.add_widget(controls)
         self.desk_results = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(12))
         self.body.add_widget(self.desk_results)
-        pages = MDBoxLayout(size_hint_y=None, height=dp(44), spacing=dp(8))
+        pages = MDBoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
         pages.add_widget(self.button("Предыдущие 20", lambda: self._desk_page(-20), compact=True))
         pages.add_widget(self.button("Следующие 20", lambda: self._desk_page(20), compact=True))
         self.body.add_widget(pages)
@@ -1127,7 +1169,6 @@ class OfficeDeskGearApp(MDApp):
         self.text("Модель: " + str(item.get("model") or "—") + "\nСерийный номер: " + str(item.get("socket_serial") or "—") +
                   "\nИнвентарный номер: " + str(item.get("inventory_number") or "—") +
                   f"\nСтол: {desk}\nСотрудник: {user}")
-        self.action("Сообщить о проблеме", lambda: self.ticket_form(item), True)
         if self.user.get("role") == "it_admin":
             self.action("Изменить устройство", lambda: self.equipment_form(item))
             self.action("Назначить или снять с сотрудника", lambda: self.assign_form(item))
@@ -1135,8 +1176,23 @@ class OfficeDeskGearApp(MDApp):
             self.action("Удалить устройство", lambda: self.confirm("Удалить оборудование?", "Удаление доступно только для оборудования без заявок и назначений.",
                         lambda: self.mutate(lambda: self.api.admin_delete_equipment(item["id"]), lambda _r: self.equipment(True))))
 
-    def ticket_form(self, equipment):
-        self.page_start("ticket_form", "Сообщить о проблеме", equipment["type"] + f" · #{equipment['id']}")
+    def _new_ticket(self):
+        def loaded(items):
+            if not items:
+                self.note("Нет доступной техники для обращения. Проверьте назначение оборудования", error=True)
+                return
+            self.ticket_form(items)
+        load = self.api.admin_list_equipment if self.user.get("role") == "it_admin" else self.api.get_my_equipment
+        self.job(load, loaded, "Загружаем доступную технику…")
+
+    def ticket_form(self, equipment_items):
+        options = {
+            item["id"]: f"{item['type']} · " +
+            (f"инв. №{item['inventory_number']}" if item.get("inventory_number") else f"№{item['id']}")
+            for item in equipment_items
+        }
+        self.page_start("ticket_form", "Новая заявка", "Выберите технику и опишите проблему")
+        equipment = self.choice("Оборудование", options, next(iter(options)))
         issue = self.choice("Тип неисправности", {"hardware": "Не включается / аппаратная неисправность", "software": "Программная ошибка", "replace": "Нужна замена", "other": "Другое"})
         description = self.field("Опишите проблему", required=True, multiline=True)
         photo = self.field("Фотография", "")
@@ -1153,10 +1209,12 @@ class OfficeDeskGearApp(MDApp):
             self.note("Описание — не более 5000 символов", error=True)
             return
         path = getattr(photo, "_file_path", photo.text.strip())
+        equipment_id = equipment._choice
+        ticket_description = f"{issue.text}: {values['description']}"
 
         def request():
             url = self.api.upload_photo(path)["photo_url"] if path else None
-            return self.api.create_ticket(equipment["id"], f"{issue.text}: {values['description']}", url)
+            return self.api.create_ticket(equipment_id, ticket_description, url)
 
         def sent(item):
             self.ticket_detail(item)
@@ -1165,13 +1223,15 @@ class OfficeDeskGearApp(MDApp):
 
     def tickets(self, admin=False):
         self.page_start("admin_tickets" if admin else "tickets", "Заявки IT-отдела" if admin else "Мои обращения")
+        if not admin:
+            self.action("Создать заявку", self._new_ticket, True)
         content = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(12))
         self.body.add_widget(content)
 
         def display(items):
             content.clear_widgets()
             if not items:
-                self.text("Заявок пока нет. Создайте обращение из карточки устройства", MUTED, target=content)
+                self.text("Заявок пока нет. Создайте заявку в этом разделе", MUTED, target=content)
             for item in sorted(items, key=lambda t: t["created_at"], reverse=True):
                 self.action(f"#{item['id']} · {STATUSES.get(item['status'], item['status'])} · устройство #{item['equipment_id']}",
                             partial(self.ticket_detail, item), target=content)
@@ -1553,8 +1613,10 @@ class OfficeDeskGearApp(MDApp):
             import cv2  # OpenCV recipe is included in the Android build.
             from kivy.uix.camera import Camera
             self._qr_detector = cv2.QRCodeDetector()
-            self.camera = Camera(index=0, resolution=(640, 480), play=True)
-            self.scanner_container.add_widget(self.camera)
+            self.camera = Camera(index=0, resolution=(640, 480), play=False)
+            self.camera_preview = CameraPreview(self.camera, self.device.camera_preview_rotation(self.camera.index))
+            self.scanner_container.add_widget(self.camera_preview)
+            self.camera.play = True
             self._events.append(Clock.schedule_interval(self._scan_frame, 0.8))
             self.note("Камера включена. Держите QR-код в центре")
         except Exception:
@@ -1597,7 +1659,9 @@ class OfficeDeskGearApp(MDApp):
         if value.isdigit():
             equipment_id = int(value)
         else:
-            match = re.fullmatch(r"(?:https?://[^\s/]+)?(?:/api/v1)?/equipment/(\d+)/?", value)
+            paths = {"", "/api/v1", urlsplit(self.api.base_url).path.rstrip("/")}
+            prefixes = "|".join(re.escape(path) for path in sorted(paths, key=len, reverse=True))
+            match = re.fullmatch(rf"(?:https?://[^\s/]+)?(?:{prefixes})/equipment/(\d+)/?", value)
             if not match:
                 self.note("QR-код не относится к оборудованию Office Desk & Gear", error=True)
                 return
@@ -1616,6 +1680,10 @@ class OfficeDeskGearApp(MDApp):
             if self.camera.parent:
                 self.camera.parent.remove_widget(self.camera)
             self.camera = None
+        if self.camera_preview is not None:
+            if self.camera_preview.parent:
+                self.camera_preview.parent.remove_widget(self.camera_preview)
+            self.camera_preview = None
         popup = getattr(self, "_photo_popup", None)
         if popup:
             popup.dismiss()
