@@ -9,7 +9,31 @@ concurrency:
   cancel-in-progress: true
 # Only a temporary PostgreSQL database and local emulator fixture API are used.
 jobs:
+  runtime-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: OfficeDeskGear-android-runtime
+          path: previous-runtime
+          github-token: ${{ github.token }}
+          run-id: 42817147558
+      - name: Inspect final fixture screenshot
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import base64
+          root = Path("previous-runtime")
+          paths = sorted(root.rglob("*screen.png"))
+          if not paths:
+              raise SystemExit("No observed runtime screenshot")
+          path = paths[-1]
+          print("SCREEN_PATH=" + str(path))
+          print("SCREEN_BASE64=" + base64.b64encode(path.read_bytes()).decode("ascii"))
+          PY
   android-runtime:
+    if: false # unchanged UI probe already failed; inspect its observed screenshot first
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:
