@@ -50,6 +50,27 @@ jobs:
           path: runtime-apk
           github-token: ${{ github.token }}
           run-id: 42810379253
+      - name: Read previous isolated UI diagnostics
+        uses: actions/download-artifact@v4
+        with:
+          name: OfficeDeskGear-android-runtime
+          path: previous-runtime
+          github-token: ${{ github.token }}
+          run-id: 42817147558
+      - name: Summarize previous fixture UI failure
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          root = Path("previous-runtime")
+          for path in root.rglob("result.json"):
+              print(str(path), path.read_text(encoding="utf-8")[:8000])
+          paths = sorted(root.rglob("*.ocr.txt"))
+          for path in paths[-5:]:
+              print(str(path), path.read_text(encoding="utf-8")[:2000])
+          for path in sorted(root.rglob("*login-field.bounds.json"))[-4:]:
+              print(str(path), path.read_text(encoding="utf-8")[:2000])
+          PY
       - name: Install runtime test dependencies
         run: |
           sudo apt-get update
@@ -92,6 +113,17 @@ jobs:
           script: |
             python tests/android_runtime.py --package org.officedeskgear.officedeskgearqa --apk $(find runtime-apk -name '*.apk' -print -quit)
             python tests/android_auth_runtime.py
+      - name: Print isolated fixture UI failure
+        if: failure()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          root = Path("tests/artifacts/android-runtime")
+          for path in root.rglob("result.json"):
+              print(str(path), path.read_text(encoding="utf-8")[:8000])
+          for path in sorted(root.rglob("*.ocr.txt"))[-5:]:
+              print(str(path), path.read_text(encoding="utf-8")[:2000])
+          PY
       - name: Save native runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v4
