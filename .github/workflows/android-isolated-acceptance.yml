@@ -1,0 +1,103 @@
+name: Android 1.1.7 isolated acceptance
+on:
+  pull_request:
+    paths:
+      - 'tests/android_runtime.py'
+      - '.github/workflows/android-isolated-acceptance.yml'
+concurrency:
+  group: android-isolated-acceptance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+# Only a temporary PostgreSQL database and local emulator fixture API are used.
+jobs:
+  android-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: runtime-ci-only-password
+          POSTGRES_DB: odg_runtime
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d odg_runtime"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:runtime-ci-only-password@127.0.0.1:5432/odg_runtime
+      APP_ENV: test
+      ENVIRONMENT: test
+      JWT_SECRET: runtime-ci-only-signing-secret-minimum-32-characters
+      REQUIRE_EMAIL_VERIFICATION: '1'
+      MAIL_MODE: outbox
+      TZ: Europe/Moscow
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require the same client source as the reused APK
+        run: git diff --exit-code 1768e993fa353841681cd28fc9bb7ccb7365dd1f HEAD -- client main.py buildozer.spec p4a-recipes
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: OfficeDeskGear-android-runtime-qa
+          path: runtime-apk
+          github-token: ${{ github.token }}
+          run-id: 42810379253
+      - name: Install runtime test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-rus
+          python -m pip install -r requirements-dev.txt pytesseract opencv-python-headless
+      - name: Start isolated API and PostgreSQL fixtures
+        run: |
+          mkdir -p tests/artifacts/android-runtime
+          python -m alembic upgrade head
+          python -m server.cli seed-demo
+          python -m uvicorn server.main:app --host 0.0.0.0 --port 8000 >tests/artifacts/android-runtime/api.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health/ready; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - name: Enable emulator KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # API 30's libndk_translation crashes on CPython's valid scalar FCVTZU
+      # instruction. Use the current Android 15 Google APIs image; its official
+      # build.prop advertises arm64-v8a and libndk_translation.so. The test still
+      # fails on missing translation, any native crash, or any failed UI check.
+      # https://developer.android.com/tools/releases/platforms
+      - name: Run the isolated QA ARM64 APK on Android 15
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 4096M
+          heap-size: 512M
+          emulator-boot-timeout: 600
+          disable-animations: true
+          enable-hw-keyboard: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back emulated
+          script: |
+            python tests/android_runtime.py --package org.officedeskgear.officedeskgearqa --apk $(find runtime-apk -name '*.apk' -print -quit)
+            python tests/android_auth_runtime.py
+      - name: Save native runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OfficeDeskGear-android-runtime
+          path: |
+            tests/artifacts/android-runtime/
+            tests/artifacts/android-auth-runtime/
+          if-no-files-found: warn

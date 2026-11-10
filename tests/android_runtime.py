@@ -101,6 +101,56 @@ def header_profile_point(picture):
     return round(x), round(y)
 
 
+def login_field_bounds(picture, observed_texts):
+    """Locate both outlined fields on an independently recognized login form.
+
+    The heading and action must be readable before field order can stand in
+    for a faint placeholder. Reject incomplete or ambiguous geometry.
+    """
+    import cv2
+    import numpy as np
+
+    texts = {normalized(text) for text in observed_texts}
+    if not {normalized("С возвращением"), normalized("Войти")}.issubset(texts):
+        raise AssertionError("Login heading and primary action were not both recognized")
+    frame = np.asarray(picture.convert("RGB"))
+    height, width = frame.shape[:2]
+    # Thin outlines are blended with the background at some Android densities.
+    neutral = cv2.inRange(frame, np.array([40, 40, 40]), np.array([90, 90, 90]))
+    bright = cv2.inRange(frame, np.array([150, 150, 150]), np.array([255, 255, 255]))
+    spread = frame.max(axis=2).astype("int16") - frame.min(axis=2)
+    neutral[spread > 5] = 0
+    bright[spread > 12] = 0
+    mask = neutral | bright
+    mask |= cv2.inRange(frame, np.array([35, 43, 58]), np.array([65, 80, 102]))
+    mask |= cv2.inRange(frame, np.array([80, 100, 150]), np.array([150, 190, 255]))
+    contours = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+    boxes = []
+    edge = max(2, round(width * .006))
+    for contour in contours:
+        x, y, box_width, box_height = cv2.boundingRect(contour)
+        if not (box_width >= width * .6 and 32 <= box_height <= height * .16
+                and x >= width * .02 and x + box_width <= width * .98):
+            continue
+        region = mask[y:y + box_height, x:x + box_width]
+        # A filled primary button or a wide line of text is not an input.
+        if cv2.countNonZero(region) >= box_width * box_height * .25:
+            continue
+        if not (np.any(region[:, :edge], axis=1).mean() >= .5
+                and np.any(region[:, -edge:], axis=1).mean() >= .5):
+            continue
+        boxes.append((x, y, x + box_width, y + box_height))
+    boxes.sort(key=lambda box: box[1])
+    if len(boxes) != 2:
+        raise AssertionError(f"Expected two observed login fields, found {len(boxes)}")
+    first, second = boxes
+    if (first[3] >= second[1] or abs(first[0] - second[0]) > width * .02
+            or abs(first[2] - second[2]) > width * .02
+            or abs((first[3] - first[1]) - (second[3] - second[1])) > height * .025):
+        raise AssertionError("Observed login fields do not form an aligned pair")
+    return boxes
+
+
 class NativeSmoke:
     def __init__(self, directory):
         self.directory = directory
@@ -220,14 +270,27 @@ class NativeSmoke:
         if any(re.search(pattern, text, flags=re.I) for pattern in patterns):
             raise AssertionError("Native/Python failure; inspect saved logcat")
 
-    def find(self, phrase, *, timeout=40, scroll=False):
+    def find(self, phrase, *, timeout=40, scroll=False, field=False):
         target = normalized(phrase)
         deadline = time.monotonic() + timeout
         swipes = 0
         while time.monotonic() < deadline:
-            for text, x, y in self.screenshot("screen"):
+            words = self.screenshot("screen")
+            for text, x, y in words:
                 if text == target:
-                    return x, y
+                    return x, (y + 12 if field else y)
+            if field and target in {normalized("Рабочая почта"), normalized("Пароль")}:
+                try:
+                    boxes = login_field_bounds(self.picture, (text for text, _, _ in words))
+                except AssertionError:
+                    pass  # Keep waiting; an unrecognized form is not a match.
+                else:
+                    index = 0 if target == normalized("Рабочая почта") else 1
+                    left, top, right, bottom = boxes[index]
+                    (self.directory / f"{self.sequence:03d}-login-field.bounds.json").write_text(
+                        json.dumps({"form": "login", "field": phrase, "bounds": boxes[index],
+                                    "method": "recognized form and observed outlines"}, ensure_ascii=False), encoding="utf-8")
+                    return (left + right) // 2, (top + bottom) // 2
             self.fatal_check()
             if scroll and swipes < 5:
                 w, h = self.size
@@ -263,8 +326,8 @@ class NativeSmoke:
         self.fatal_check()
 
     def fill(self, label, value):
-        x, y = self.find(label)
-        adb("shell", "input", "tap", str(x), str(y + 12))
+        x, y = self.find(label, field=True)
+        adb("shell", "input", "tap", str(x), str(y))
         time.sleep(.5)
         adb("shell", "input", "keyevent", "123")  # MOVE_END
         adb("shell", "input", "keyevent", *(["67"] * 128))
