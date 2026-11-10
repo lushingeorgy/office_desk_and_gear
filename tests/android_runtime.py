@@ -276,10 +276,13 @@ class NativeSmoke:
         swipes = 0
         while time.monotonic() < deadline:
             words = self.screenshot("screen")
-            for text, x, y in words:
-                if text == target:
-                    return x, (y + 12 if field else y)
-            if field and target in {normalized("Рабочая почта"), normalized("Пароль")}:
+            texts = {text for text, _, _ in words}
+            login_field = (field and target in {normalized("Рабочая почта"), normalized("Пароль")}
+                           and normalized("С возвращением") in texts)
+            # A word inside "Забыли пароль?" is a button, not the password
+            # field. On the recognized login form, use only its observed
+            # outlined input boxes and reject ambiguous geometry.
+            if login_field:
                 try:
                     boxes = login_field_bounds(self.picture, (text for text, _, _ in words))
                 except AssertionError:
@@ -291,6 +294,10 @@ class NativeSmoke:
                         json.dumps({"form": "login", "field": phrase, "bounds": boxes[index],
                                     "method": "recognized form and observed outlines"}, ensure_ascii=False), encoding="utf-8")
                     return (left + right) // 2, (top + bottom) // 2
+            if not login_field:
+                for text, x, y in words:
+                    if text == target:
+                        return x, (y + 12 if field else y)
             self.fatal_check()
             if scroll and swipes < 5:
                 w, h = self.size
