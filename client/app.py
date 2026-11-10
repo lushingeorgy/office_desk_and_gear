@@ -24,7 +24,6 @@ from kivy.utils import platform
 from kivymd.app import MDApp
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDButton, MDButtonIcon, MDButtonText, MDIconButton
-from kivymd.uix.gridlayout import MDGridLayout
 from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.selectioncontrol import MDCheckbox
@@ -34,6 +33,7 @@ from client.core.config import API_BASE_URL
 from client.core.device import DeviceTools
 from client.core.storage import LocalState
 from client.core.worker import BackgroundWorker
+from client.floor_plan import FloorPlan
 from client.registration import ACCENT, BACKGROUND, BORDER, ERROR, MUTED, SUCCESS, SURFACE, TEXT, label
 from client.services.api_client import ApiClient, ApiError
 from client.theme import configure_theme
@@ -131,7 +131,9 @@ class OfficeDeskGearApp(MDApp):
         self.filters = {"search": "", "floor": "", "section": "", "sockets": "", "features": "",
                         "sort": "number", "order": "asc", "date": dt.date.today().isoformat(),
                         "start_time": "09:00", "end_time": "17:00"}
-        self.desk_offset, self.map_mode = 0, False
+        self.map_mode = os.environ.get("ODG_START_PLAN") == "1"
+        self.map_floor = None
+        self.initial_page = os.environ.get("ODG_START_PAGE", "home")
         self.root_screen = MDScreen(md_bg_color=BACKGROUND)
         self.shell = MDBoxLayout(orientation="vertical", padding=(dp(18), dp(12)), spacing=dp(8), opacity=0)
         self.root_screen.add_widget(self.shell)
@@ -195,14 +197,22 @@ class OfficeDeskGearApp(MDApp):
     def _restore_session(self, _dt):
         self.user = self.model.restore()
         if self.user:
-            self.home()
+            self._open_initial_page()
         else:
             self.login()
         self._startup_event = Clock.schedule_once(self._finish_startup, 0.12)
 
+    def _open_initial_page(self):
+        page, self.initial_page = self.initial_page, "home"
+        (self.desks if page == "desks" else self.home)()
+
     def _finish_startup(self, _dt):
         self.shell.opacity = 1
         self.startup.dismiss()
+        if platform == "win":
+            Window.show()
+            Window.restore()
+            Window.raise_window()
 
     def _configure_system_bars(self):
         if platform == "android":
@@ -567,7 +577,7 @@ class OfficeDeskGearApp(MDApp):
                 self.note("Не удалось безопасно сохранить вход. Проверьте хранилище устройства", error=True)
                 return
             self.user = user
-            self.home()
+            self._open_initial_page()
         def authenticate():
             try:
                 return self.model.authenticate(**values)
@@ -732,7 +742,6 @@ class OfficeDeskGearApp(MDApp):
         self.filters.update(search=str(desk.get("number") or ""), date=start.date().isoformat(),
                             floor=str(desk.get("floor") or ""), section=str(desk.get("section") or ""),
                             sockets="", features="", sort="number", order="asc")
-        self.desk_offset = 0
         self.desks(interval=(start, end))
 
     def logout(self):
@@ -835,10 +844,6 @@ class OfficeDeskGearApp(MDApp):
         self.body.add_widget(controls)
         self.desk_results = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(12))
         self.body.add_widget(self.desk_results)
-        pages = MDBoxLayout(size_hint_y=None, height=dp(50), spacing=dp(8))
-        pages.add_widget(self.button("Предыдущие 20", lambda: self._desk_page(-20), compact=True))
-        pages.add_widget(self.button("Следующие 20", lambda: self._desk_page(20), compact=True))
-        self.body.add_widget(pages)
         self._load_desks()
 
     def _desk_search(self, search, date, start_time, end_time, end_date=None):
@@ -863,7 +868,6 @@ class OfficeDeskGearApp(MDApp):
             values.pop("end_date")
         self.filters.pop("end_date", None)
         self.filters.update(search=search.text.strip(), **values)
-        self.desk_offset = 0
         self.desks()
 
     def _desk_interval(self, filters=None):
@@ -876,25 +880,39 @@ class OfficeDeskGearApp(MDApp):
         self.map_mode = not self.map_mode
         self.desks()
 
-    def _desk_page(self, delta):
-        if delta > 0 and not getattr(self, "desk_has_more", False):
-            self.note("Это последняя страница")
-            return
-        self.desk_offset = max(0, self.desk_offset + delta)
-        self.desks()
+    def _select_map_floor(self, floor):
+        self.map_floor = floor
+        self.filters["floor"] = str(floor)
 
     def _load_desks(self):
         filters = self.filters.copy()
         args = {k: int(filters[k]) if filters[k] else None for k in ("floor", "section", "sockets")}
         args.update(search=filters["search"] or None, sort=filters["sort"], order=filters["order"],
-                    features=[int(v) for v in filters["features"].split(",") if v.strip()], limit=20, offset=self.desk_offset)
+                    features=[int(v) for v in filters["features"].split(",") if v.strip()], limit=200, offset=0)
+        if self.map_mode:
+            # The floor filter selects the initial floor, rather than hiding
+            # every other floor from the right-hand navigator.
+            args["floor"] = None
         start_at, end_at = self._desk_interval(filters)
         args.update(start_at=start_at.isoformat(), end_at=end_at.isoformat())
-        key = "desks:" + repr(sorted(args.items())) + filters["date"]
+        key = "desks:complete:" + repr(sorted(args.items())) + filters["date"]
 
         def fetch():
-            desks = self.api.get_desks(**args)
-            partial_message = self.api.last_meta.get("x-partial-match")
+            desks, partial_message = [], None
+            query = args.copy()
+            while True:
+                batch = self.api.get_desks(**dict(query, offset=len(desks))) or []
+                partial_match = self.api.last_meta.get("x-partial-match") == "true"
+                # The API may soften sockets on an empty page. A later
+                # softened page is not a continuation of strict matches.
+                if desks and partial_match and partial_message is None:
+                    break
+                if partial_match:
+                    partial_message = "true"
+                    query["sockets"] = None
+                desks.extend(batch)
+                if len(batch) < args["limit"]:
+                    break
             return {"desks": desks, "bookings": self.api.get_availability(date=filters["date"]), "partial": partial_message,
                     "interval_label": start_at.strftime("%d.%m %H:%M") + "–" + end_at.strftime("%d.%m %H:%M")}
         self.job(fetch, self._display_desks, cache_key=key, cached=self._display_desks, target=self.desk_results)
@@ -902,8 +920,7 @@ class OfficeDeskGearApp(MDApp):
     def _display_desks(self, data):
         self.desk_results.clear_widgets()
         desks, bookings = data.get("desks") or [], data.get("bookings") or []
-        self.desk_has_more = len(desks) == 20
-        self.text("Записи " + str(self.desk_offset + 1) + "–" + str(self.desk_offset + len(desks)) if desks else "Столы не найдены", MUTED, target=self.desk_results)
+        self.text(f"Найдено мест: {len(desks)}" if desks else "Столы не найдены", MUTED, target=self.desk_results)
         interval_label = data.get("interval_label", "09:00–17:00")
         self.text("Доступность за " + interval_label, MUTED, target=self.desk_results)
         legend = MDBoxLayout(size_hint_y=None, height=dp(32), spacing=dp(12))
@@ -913,22 +930,13 @@ class OfficeDeskGearApp(MDApp):
         if data.get("partial") == "true":
             self.text("Точных совпадений нет. Показаны близкие варианты", ACCENT, target=self.desk_results)
         if self.map_mode:
-            groups = {}
-            for desk in desks:
-                groups.setdefault((desk.get("floor"), desk.get("section")), []).append(desk)
-            for (floor, section), items in groups.items():
-                self.text(f"Этаж {floor or '—'} · секция {section or '—'}", ACCENT, target=self.desk_results)
-                grid = MDGridLayout(cols=2, adaptive_height=True, spacing=dp(8))
-                self.desk_results.add_widget(grid)
-                for desk in items:
-                    _, color, availability = self._desk_status(desk)
-                    title = f"Стол {desk['number']}\n" + ("Свободен" if availability == "free" else "Занят" if availability == "occupied" else "Недоступен")
-                    button = self.button(title, partial(self.desk_detail, desk))
-                    button.height = dp(80)
-                    button.md_bg_color = (*color[:3], 0.10)
-                    button._desk_id, button._availability = desk["id"], availability
-                    next(w for w in button.children if isinstance(w, MDButtonText)).text_color = color
-                    grid.add_widget(button)
+            if any(desk.get("floor") is not None for desk in desks):
+                self.floor_plan = FloorPlan(desks, self.map_floor, self._desk_status,
+                                            lambda desk: self._navigate(partial(self.desk_detail, desk)),
+                                            self._select_map_floor)
+                self.desk_results.add_widget(self.floor_plan)
+            elif desks:
+                self.text("Для этих мест не указан этаж. Посмотрите их в списке.", MUTED, target=self.desk_results)
         else:
             for desk in desks:
                 busy = sum(1 for b in bookings if b["desk_id"] == desk["id"] and not b.get("is_cancelled"))
@@ -972,12 +980,12 @@ class OfficeDeskGearApp(MDApp):
         feature_ids = sorted(features.selected)
         self.filters.update({key: str(value) if value is not None else "" for key, value in values.items()})
         self.filters.update(features=",".join(map(str, feature_ids)), sort=sort._choice, order=order._choice)
-        self.desk_offset = 0
+        self.map_floor = values.get("floor")
         self.desks()
 
     def _reset_filters(self):
         self.filters.update(search="", floor="", section="", sockets="", features="", sort="number", order="asc")
-        self.desk_offset = 0
+        self.map_floor = None
         self.desks()
 
     def desk_detail(self, desk):
@@ -1068,7 +1076,7 @@ class OfficeDeskGearApp(MDApp):
         def saved(data):
             if isinstance(data, dict) and "conflict" in data:
                 self.filters["date"] = start.date().isoformat()
-                self.desk_offset, self.map_mode = 0, True
+                self.map_mode = True
                 self.desks(booking_notice=data["conflict"], interval=(start, start + dt.timedelta(hours=values["duration"])))
                 return
             result, meta = data

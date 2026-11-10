@@ -42,6 +42,9 @@ id_ed25519*
 
 .clientdata/
 client/.clientdata/
+/.appdata/
+/.kivy/
+/*.apk
 
 tests/_kivy_home/
 tests/_session_tmp/
@@ -61,6 +64,8 @@ Thumbs.db
 desktop.ini
 .vscode/*
 !.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
 .idea/
 .env
 .env.*

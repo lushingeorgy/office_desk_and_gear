@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import socket
 import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -117,11 +118,29 @@ class ApiClient:
         except requests.exceptions.Timeout as error:
             raise ApiError("Сервер не отвечает. Проверьте подключение") from error
         except requests.exceptions.RequestException as error:
-            raise ApiError("Нет соединения с сервером. Проверьте сеть и повторите попытку позже") from error
+            raise ApiError(self._network_message(error)) from error
         finally:
             if response is not None and hasattr(response, "close"):
                 response.close()
             self._release()
+
+    @staticmethod
+    def _network_message(error):
+        if isinstance(error, requests.exceptions.SSLError):
+            return "Не удалось проверить сертификат сервера. Проверьте дату и время на устройстве"
+        if isinstance(error, requests.exceptions.ProxyError):
+            return "Не удалось подключиться через прокси. Проверьте настройки сети"
+        pending, seen = [error], set()
+        while pending:
+            cause = pending.pop()
+            if not isinstance(cause, BaseException) or id(cause) in seen:
+                continue
+            seen.add(id(cause))
+            if isinstance(cause, socket.gaierror):
+                return "Не удалось определить адрес сервера (DNS). Проверьте подключение к сети"
+            pending.extend((cause.__cause__, cause.__context__, getattr(cause, "reason", None)))
+            pending.extend(cause.args)
+        return "Нет соединения с сервером. Проверьте сеть и повторите попытку позже"
 
     def register(self, full_name, email, password, role="employee", job_title="", confirm_password=None):
         return self._request("POST", "/auth/register", json={

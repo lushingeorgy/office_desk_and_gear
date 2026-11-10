@@ -15,4 +15,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from client.desktop import launch
+    raise SystemExit(launch(main))

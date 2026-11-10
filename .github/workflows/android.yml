@@ -175,6 +175,14 @@ jobs:
               with tarfile.open(fileobj=io.BytesIO(archive.read('assets/private.tar'))) as private:
                   config = private.extractfile('client/core/config.pyc').read()
                   icon = private.extractfile('client/assets/icon.png').read()
+                  app = private.extractfile('client/app.pyc').read()
+                  floor_plan = private.extractfile('client/floor_plan.pyc').read()
+                  assert private.getmember('client/desktop.pyc').size > 0
+                  assert b'FloorPlan' in app and b'_select_map_floor' in app
+                  assert b'select_floor' in floor_plan and b'move_floor' in floor_plan
+                  assert b'desks:complete:' in app
+                  for obsolete in ('Предыдущие 20', 'Следующие 20'):
+                      assert obsolete.encode('utf-8') not in app
               native_icon = archive.read('res/mipmap/icon.png')
           assert hashlib.sha256(icon).digest() == hashlib.sha256(Path('client/assets/icon.png').read_bytes()).digest()
           # Reject the default Kivy launcher icon used by previous builds.
