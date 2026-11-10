@@ -325,15 +325,21 @@ class NativeSmoke:
         time.sleep(.7)
         self.fatal_check()
 
-    def fill(self, label, value):
+    def fill(self, label, value, *, clear=True):
         x, y = self.find(label, field=True)
         adb("shell", "input", "tap", str(x), str(y))
-        time.sleep(.5)
-        adb("shell", "input", "keyevent", "123")  # MOVE_END
-        adb("shell", "input", "keyevent", *(["67"] * 128))
-        time.sleep(.5)
+        time.sleep(1)
+        self.screenshot("focused-field")
+        if clear:
+            adb("shell", "input", "keyevent", "123")  # MOVE_END
+            adb("shell", "input", "keyevent", *(["67"] * 128))
+            time.sleep(.8)
         # All input values here are fixed ASCII test fixtures, with no shell syntax.
+        # The cold login form is observed empty; do not queue unnecessary delete
+        # events before typing into those two fresh fields.
         adb("shell", "input", "text", value)
+        time.sleep(1)
+        self.screenshot("typed-field")
         # SDL forwards Android key events to Kivy asynchronously. Let the last
         # characters arrive before Back dismisses the IME/field focus.
         time.sleep(.8)
@@ -437,8 +443,8 @@ class NativeSmoke:
         self.click("У меня уже есть аккаунт", scroll=True)
         self.find("С возвращением")
         self.check("QA build binds its fixed local API without manual settings", self.state().get("api_url") == API_URL)
-        self.fill("Рабочая почта", EMAIL)
-        self.fill("Пароль", PASSWORD)
+        self.fill("Рабочая почта", EMAIL, clear=False)
+        self.fill("Пароль", PASSWORD, clear=False)
         self.click_primary("С возвращением", EMAIL)
         self.find("Быстрые действия", timeout=60)
         state = self.wait_state(lambda item: bool(item.get("cache", {}).get("home")) and bool(item.get("credential")), "Login did not persist credential and the completed home response")

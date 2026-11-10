@@ -9,31 +9,7 @@ concurrency:
   cancel-in-progress: true
 # Only a temporary PostgreSQL database and local emulator fixture API are used.
 jobs:
-  runtime-evidence:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: OfficeDeskGear-android-runtime
-          path: previous-runtime
-          github-token: ${{ github.token }}
-          run-id: 42817147558
-      - name: Inspect final fixture screenshot
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import base64
-          root = Path("previous-runtime")
-          paths = sorted(root.rglob("*screen.png"))
-          if not paths:
-              raise SystemExit("No observed runtime screenshot")
-          path = paths[-1]
-          print("SCREEN_PATH=" + str(path))
-          print("SCREEN_BASE64=" + base64.b64encode(path.read_bytes()).decode("ascii"))
-          PY
   android-runtime:
-    if: false # unchanged UI probe already failed; inspect its observed screenshot first
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     services:
@@ -74,27 +50,6 @@ jobs:
           path: runtime-apk
           github-token: ${{ github.token }}
           run-id: 42810379253
-      - name: Read previous isolated UI diagnostics
-        uses: actions/download-artifact@v4
-        with:
-          name: OfficeDeskGear-android-runtime
-          path: previous-runtime
-          github-token: ${{ github.token }}
-          run-id: 42817147558
-      - name: Summarize previous fixture UI failure
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import json
-          root = Path("previous-runtime")
-          for path in root.rglob("result.json"):
-              print(str(path), path.read_text(encoding="utf-8")[:8000])
-          paths = sorted(root.rglob("*.ocr.txt"))
-          for path in paths[-5:]:
-              print(str(path), path.read_text(encoding="utf-8")[:2000])
-          for path in sorted(root.rglob("*login-field.bounds.json"))[-4:]:
-              print(str(path), path.read_text(encoding="utf-8")[:2000])
-          PY
       - name: Install runtime test dependencies
         run: |
           sudo apt-get update
@@ -142,11 +97,17 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import base64
           root = Path("tests/artifacts/android-runtime")
           for path in root.rglob("result.json"):
               print(str(path), path.read_text(encoding="utf-8")[:8000])
           for path in sorted(root.rglob("*.ocr.txt"))[-5:]:
               print(str(path), path.read_text(encoding="utf-8")[:2000])
+          paths = sorted(root.rglob("*focused-field.png")) + sorted(root.rglob("*typed-field.png"))
+          paths += sorted(root.rglob("*screen.png"))[-1:]
+          for path in paths[-5:]:
+              print("SCREEN_PATH=" + str(path))
+              print("SCREEN_BASE64=" + base64.b64encode(path.read_bytes()).decode("ascii"))
           PY
       - name: Save native runtime diagnostics
         if: always()
