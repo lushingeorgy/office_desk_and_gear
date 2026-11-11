@@ -1,5 +1,22 @@
 # Сборка и проверка Android
 
+## APK 1.1.8 — 11 ноября 2026
+
+[Скачать OfficeDeskGear-1.1.8.apk](../OfficeDeskGear-1.1.8.apk).
+ARM64 APK собран из коммита `00257c84bf8481fbd25805796685f1815d5ca124`.
+В манифесте указаны пакет `org.officedeskgear.officedeskgear`, версия
+`1.1.8` и код `102910108`. В клиенте проверен рабочий HTTPS-адрес API.
+
+- SHA-256 APK — `7be16d058bcb28d697ca4646599860e647495fdb607e2068015c5801d5c008ba`.
+- SHA-256 сертификата разработки — `128f1e892f262ccf78e57b6d7116a5a0f388d06b7e97c835293061c9419a09d6`.
+  У APK 1.1.7 другой сертификат, поэтому Android отклонит установку 1.1.8 поверх него.
+
+[Сборка и проверка подписи](https://github.com/lushingeorgy/office_desk_and_gear/actions/runs/43073164201/job/130706093171)
+и [тесты PostgreSQL](https://github.com/lushingeorgy/office_desk_and_gear/actions/runs/43073164048)
+прошли. В [отдельном прогоне QA на Android 15](https://github.com/lushingeorgy/office_desk_and_gear/actions/runs/43073164201/job/130719791351)
+приложение открыло форму регистрации. Поле «Должность» видно на сохранённом снимке,
+но OCR не распознал его подпись, и дальнейшие шаги сценария остались непроверенными.
+
 ## APK 1.1.7 — 10 ноября 2026
 
 Новая сборка успешно подготовлена из коммита
