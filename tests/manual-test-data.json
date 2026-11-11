@@ -1,0 +1,39 @@
+{
+  "purpose": "Manual UI checks for a fresh development database only",
+  "setup": ".venv/Scripts/python.exe -m server.cli seed-demo",
+  "accounts": [
+    {
+      "email": "employee@company.ru",
+      "password": "password123",
+      "role": "employee",
+      "position": "Сотрудник"
+    },
+    {
+      "email": "office@company.ru",
+      "password": "password123",
+      "role": "office_manager",
+      "position": "Офис-менеджер"
+    },
+    {
+      "email": "it@company.ru",
+      "password": "password123",
+      "role": "it_admin",
+      "position": "IT-администратор"
+    }
+  ],
+  "equipment_qr_codes": [
+    {
+      "equipment_id": 1,
+      "name": "Ноутбук ODG-LAPTOP-001",
+      "payload": "/api/v1/equipment/1",
+      "image": "fixtures/manual-qr/equipment-1.png"
+    },
+    {
+      "equipment_id": 2,
+      "name": "Монитор ODG-MONITOR-001",
+      "payload": "/api/v1/equipment/2",
+      "image": "fixtures/manual-qr/equipment-2.png"
+    }
+  ],
+  "note": "seed-demo is additive. These equipment IDs and QR images match a fresh local database where the two demo devices receive IDs 1 and 2. Do not use demo credentials in production."
+}

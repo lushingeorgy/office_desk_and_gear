@@ -1,6 +1,7 @@
 """Client lifecycle, persistence and isolation checks without opening a window."""
 import datetime as dt
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -12,11 +13,12 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-TEMP = ROOT / "tests" / "artifacts" / "client-unit"
+TEMP = Path(os.getenv("ODG_TEST_TEMP", str(ROOT / "tests" / "artifacts" / "client-unit")))
 TEMP.mkdir(parents=True, exist_ok=True)
 tempfile.tempdir = str(TEMP)
 
 from client.core.storage import LocalState, TokenVault
+from client.core.device import DeviceTools
 from client.core.worker import BackgroundWorker
 from client.services.api_client import ApiClient, ApiError
 from client.viewmodels.session import SessionViewModel
@@ -35,6 +37,22 @@ class Response:
 
 
 class ClientStateTests(unittest.TestCase):
+    def test_camera_rotation_matches_sensor_and_display_instead_of_fixed_quarter_turn(self):
+        for sensor, display, expected in ((90, 0, 90), (270, 0, 270), (90, 1, 0),
+                                           (0, 1, 270), (90, 2, 270), (90, 3, 180)):
+            with self.subTest(sensor=sensor, display=display):
+                info = SimpleNamespace(orientation=sensor, facing=0)
+                classes = {
+                    "android.hardware.Camera": SimpleNamespace(getCameraInfo=lambda _index, _info: None),
+                    "android.hardware.Camera$CameraInfo": lambda: info,
+                    "org.kivy.android.PythonActivity": SimpleNamespace(mActivity=SimpleNamespace(
+                        getWindowManager=lambda: SimpleNamespace(getDefaultDisplay=lambda: SimpleNamespace(
+                            getRotation=lambda: display)))),
+                }
+                with patch.dict(sys.modules, {"jnius": SimpleNamespace(autoclass=classes.__getitem__)}):
+                    self.assertEqual(expected, DeviceTools("android", None, None).camera_preview_rotation(0))
+        self.assertEqual(0, DeviceTools("win", None, None).camera_preview_rotation(0))
+
     def test_android_keystore_passes_java_varargs_as_strings(self):
         testcase = self
 
@@ -182,6 +200,27 @@ class ClientStateTests(unittest.TestCase):
             {"assigned_user_id": None, "desk_id": None},
             {},
         ], calls)
+
+    def test_assignment_desk_choices_load_beyond_two_hundred_records(self):
+        desks = [{"id": index} for index in range(420)]
+        offsets, responses = [], []
+
+        def transport(_method, _url, **kwargs):
+            query = kwargs["params"]
+            offsets.append(query["offset"])
+            page = desks[query["offset"]:query["offset"] + query["limit"]]
+            response = Response()
+            response.json = lambda: page
+            responses.append(response)
+            return response
+
+        api = ApiClient(transport=transport)
+        try:
+            self.assertEqual(desks, api.get_all_desks())
+            self.assertEqual([0, 200, 400], offsets)
+            self.assertTrue(all(response.closed for response in responses))
+        finally:
+            api.close()
 
     def test_pause_defers_pool_close_until_active_response_finishes(self):
         entered, release = threading.Event(), threading.Event()

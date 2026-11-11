@@ -30,7 +30,7 @@ class User(Base):
     phone: Mapped[str] = mapped_column(String(40), nullable=False, default="", server_default="")
     avatar_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
 
-    bookings = relationship("Booking", lazy="selectin",
+    bookings = relationship("Booking", lazy="raise",
         back_populates="user",
         passive_deletes=True,
     )

@@ -339,16 +339,19 @@ class OfficeDeskGearApp(MDApp):
         (target or self.body).add_widget(item)
         return item
 
-    def field(self, title, value="", *, secret=False, required=False, kind="text", target=None, multiline=False):
+    def field(self, title, value="", *, secret=False, required=False, kind="text", target=None,
+              multiline=False, max_length=None):
         item = MDTextField(MDTextFieldHintText(text=title + (" *" if required else ""), text_color_normal=MUTED,
                                              text_color_focus=ACCENT),
-                           text=str(value or ""), mode="outlined", size_hint_y=None, height=dp(124 if multiline else 66),
+                           text="" if value is None else str(value), mode="outlined", size_hint_y=None, height=dp(124 if multiline else 66),
                            radius=[dp(12)], multiline=multiline, write_tab=False, password=secret,
                            input_type="mail" if kind == "email" else "number" if kind == "int" else "text",
                            keyboard_suggestions=not secret and kind not in {"email", "int", "datetime", "date", "time"},
                            theme_text_color="Custom", text_color_normal=TEXT, text_color_focus=TEXT,
                            theme_line_color="Custom", line_color_normal=BORDER, line_color_focus=ACCENT, error_color=ERROR)
         item._required, item._kind, item._title = required, kind, title
+        item._secret = secret
+        item._max_length = max_length if max_length is not None else (5000 if multiline else 1024 if secret else 255)
         item.bind(text=lambda w, _t: setattr(w, "error", False), focus=self._focus)
         if kind in {"date", "datetime"}:
             item.add_widget(MDTextFieldTrailingIcon(icon="calendar-month-outline"))
@@ -386,10 +389,10 @@ class OfficeDeskGearApp(MDApp):
         result = {}
         try:
             for key, field in fields.items():
-                value = field.text if field.password else field.text.strip()
+                value = field.text if getattr(field, "_secret", field.password) else field.text.strip()
                 if field._required and not value:
                     raise ValueError(f"Заполните поле «{field._title}»")
-                if len(str(value)) > (5000 if field.multiline else 1024 if field.password else 255):
+                if len(str(value)) > getattr(field, "_max_length", 255):
                     raise ValueError(f"Поле «{field._title}» слишком длинное")
                 if not value:
                     result[key] = None
@@ -593,23 +596,21 @@ class OfficeDeskGearApp(MDApp):
             self.verify(values["email"])
 
     def register(self):
-        self.page_start("register", "Создать аккаунт", "Зарегистрируйте рабочий профиль и выберите должность.")
+        self.page_start("register", "Создать аккаунт", "Укажите рабочую почту и данные профиля.")
         fields = {"full_name": self.field("ФИО", required=True)}
-        self._registration_role = self.choice("Должность", ROLES, "employee")
-        self._registration_role.add_widget(MDTextFieldTrailingIcon(icon="menu-down"))
-        fields["job_title"] = self._registration_role
+        fields["job_title"] = self.field("Должность")
         fields.update({"email": self.field("Рабочая почта", required=True, kind="email"),
                   "password": self.field("Пароль от 6 символов", required=True, secret=True),
                   "confirm_password": self.field("Повторите пароль", required=True, secret=True)})
-        self.action("Создать аккаунт", lambda: self._register(fields, self._registration_role), True)
+        self.action("Создать аккаунт", lambda: self._register(fields), True)
         self.action("У меня уже есть аккаунт", self.login)
 
-    def _register(self, fields, role=None):
+    def _register(self, fields):
         values = self.values(fields)
         if not values:
             return
-        selected_role = role if role is not None else getattr(self, "_registration_role", None)
-        values["role"] = selected_role._choice if selected_role is not None else "employee"
+        values["role"] = "employee"
+        values["job_title"] = values["job_title"] or ""
         if len(values["password"]) < 6 or values["password"] != values["confirm_password"]:
             fields["confirm_password"].error = True
             self.note("Пароль — от 6 символов. Пароли должны совпадать", error=True)
@@ -625,7 +626,7 @@ class OfficeDeskGearApp(MDApp):
 
     def verify(self, email):
         self.page_start("verify", "Подтвердить почту", "Введите код из письма для " + email)
-        code = self.field("Код подтверждения", required=True)
+        code = self.field("Код подтверждения", required=True, max_length=6)
         self.action("Подтвердить", lambda: self._verify(email, code), True)
         self.action("Отправить код ещё раз", lambda: self.job(lambda: self.api.resend_verification(email),
                     lambda result: self.note(result.get("message", "Письмо отправлено"), success=True)))
@@ -634,6 +635,10 @@ class OfficeDeskGearApp(MDApp):
     def _verify(self, email, code):
         values = self.values({"code": code})
         if values:
+            if re.fullmatch(r"[0-9]{6}", values["code"]) is None:
+                code.error = True
+                self.note("Код должен состоять из шести цифр", error=True)
+                return
             self.job(lambda: self.api.verify_email(email, values["code"]),
                      lambda _result: self._verified(), "Проверяем код…")
 
@@ -645,7 +650,7 @@ class OfficeDeskGearApp(MDApp):
         self.page_start("reset", "Восстановить пароль", "Получите код на рабочую почту, затем задайте новый пароль.")
         email = self.field("Рабочая почта", required=True, kind="email")
         self.action("Получить код", lambda: self._reset_request(email))
-        fields = {"email": email, "code": self.field("Код из письма", required=True),
+        fields = {"email": email, "code": self.field("Код из письма", required=True, max_length=6),
                   "new_password": self.field("Новый пароль от 6 символов", secret=True, required=True),
                   "confirm": self.field("Повторите новый пароль", secret=True, required=True)}
         self.action("Сменить пароль", lambda: self._reset_confirm(fields), True)
@@ -660,6 +665,10 @@ class OfficeDeskGearApp(MDApp):
     def _reset_confirm(self, fields):
         values = self.values(fields)
         if not values:
+            return
+        if re.fullmatch(r"[0-9]{6}", values["code"]) is None:
+            fields["code"].error = True
+            self.note("Код должен состоять из шести цифр", error=True)
             return
         if len(values["new_password"]) < 6 or values.pop("confirm") != values["new_password"]:
             self.note("Новый пароль — от 6 символов. Подтверждение должно совпадать", error=True)
@@ -825,7 +834,7 @@ class OfficeDeskGearApp(MDApp):
         self.page_start("desks", "Рабочие места", "Выберите день и время, когда планируете работать в офисе.")
         if booking_notice:
             self.text("Бронирование не выполнено: " + booking_notice, ERROR)
-        search = self.field("Поиск по номеру стола", self.filters["search"])
+        search = self.field("Поиск по номеру стола", self.filters["search"], max_length=100)
         date = self.field("Дата · ГГГГ-ММ-ДД", self.filters["date"], kind="date", required=True)
         times = MDBoxLayout(size_hint_y=None, height=dp(66), spacing=dp(12))
         self.body.add_widget(times)
@@ -1121,7 +1130,7 @@ class OfficeDeskGearApp(MDApp):
             self.text("Отменена: " + (booking.get("cancellation_reason") or "пользователем"), ERROR)
         else:
             if admin:
-                reason = self.field("Причина отмены", required=True)
+                reason = self.field("Причина отмены", required=True, max_length=512)
                 self.action("Отменить от имени администратора", lambda: self._admin_cancel(booking, reason))
             else:
                 self.action("Изменить дату и длительность", lambda: self.booking_form(
@@ -1202,7 +1211,7 @@ class OfficeDeskGearApp(MDApp):
         self.page_start("ticket_form", "Новая заявка", "Выберите технику и опишите проблему")
         equipment = self.choice("Оборудование", options, next(iter(options)))
         issue = self.choice("Тип неисправности", {"hardware": "Не включается / аппаратная неисправность", "software": "Программная ошибка", "replace": "Нужна замена", "other": "Другое"})
-        description = self.field("Опишите проблему", required=True, multiline=True)
+        description = self.field("Опишите проблему", required=True, multiline=True, max_length=10000)
         photo = self.field("Фотография", "")
         photo.readonly = True
         self.action("Выбрать фото из галереи", lambda: self.choose_photo(lambda path: self._selected_photo(photo, path)))
@@ -1257,7 +1266,7 @@ class OfficeDeskGearApp(MDApp):
         if self.user.get("role") == "it_admin":
             status = self.choice("Новый статус", {key: STATUSES[key] for key in ("new", "in_progress", "resolved", "closed")}, item["status"])
             self.action("Обновить статус", lambda: self.mutate(lambda: self.api.admin_update_ticket_status(item["id"], status._choice), self.ticket_detail), True)
-            comment = self.field("Комментарий IT-специалиста", required=True, multiline=True)
+            comment = self.field("Комментарий IT-специалиста", required=True, multiline=True, max_length=4000)
             self.action("Добавить комментарий", lambda: self._comment(item, comment))
 
         def display(history):
@@ -1322,8 +1331,8 @@ class OfficeDeskGearApp(MDApp):
         values = self.values(fields)
         if not values:
             return
-        if any(values[key] <= 0 for key in ("number", "floor", "section")):
-            self.note("Номер стола, этаж и секция должны быть положительными", error=True)
+        if values["number"] <= 0 or values["section"] <= 0:
+            self.note("Номер стола и секция должны быть положительными", error=True)
             return
         values["features"] = sorted(features.selected)
         values["is_free"] = available._choice
@@ -1337,10 +1346,10 @@ class OfficeDeskGearApp(MDApp):
     def equipment_form(self, item=None):
         item = item or {}
         self.page_start("equipment_form", "Изменить оборудование" if item else "Добавить оборудование")
-        fields = {"type": self.field("Тип оборудования", item.get("type"), required=True),
-                  "model": self.field("Модель", item.get("model"), required=not bool(item)),
-                  "socket_serial": self.field("Серийный номер", item.get("socket_serial"), required=True),
-                  "inventory_number": self.field("Инвентарный номер", item.get("inventory_number"), required=not bool(item))}
+        fields = {"type": self.field("Тип оборудования", item.get("type"), required=True, max_length=128),
+                  "model": self.field("Модель", item.get("model"), required=not bool(item), max_length=128),
+                  "socket_serial": self.field("Серийный номер", item.get("socket_serial"), required=True, max_length=128),
+                  "inventory_number": self.field("Инвентарный номер", item.get("inventory_number"), required=not bool(item), max_length=128)}
         self._equipment_desk_choice = None
         desk_holder = MDBoxLayout(orientation="vertical", adaptive_height=True)
         self.body.add_widget(desk_holder)
@@ -1358,7 +1367,7 @@ class OfficeDeskGearApp(MDApp):
             options.update({desk["id"]: f"Стол {desk['number']} · этаж {desk.get('floor', '—')}" for desk in desks})
             self._equipment_desk_choice = self.choice("Рабочее место", options, item.get("desk_id"), target=desk_holder)
         if not item:
-            self.job(lambda: self.api.get_desks(limit=200), display, cache_key="desks:assign", cached=display)
+            self.job(self.api.get_all_desks, display, cache_key="desks:assign", cached=display)
 
     def _equipment_save(self, item, fields, socket, status):
         values = self.values(fields)
@@ -1369,6 +1378,13 @@ class OfficeDeskGearApp(MDApp):
         if desk_choice is not None and desk_choice._choice is not None:
             values["desk_id"] = desk_choice._choice
         values.update(socket_needed=socket._choice, status=status._choice)
+        has_assignment = item.get("assigned_user_id") is not None or values.get("desk_id", item.get("desk_id")) is not None
+        if has_assignment and status._choice in {"in_stock", "written_off"}:
+            self.note("Снимите закрепление перед отправкой на склад или списанием", error=True)
+            return
+        if not has_assignment and status._choice == "assigned":
+            self.note("Для статуса «выдано» назначьте сотрудника или рабочее место", error=True)
+            return
 
         def request():
             return self.api.admin_update_equipment(item["id"], **values) if item else self.api.admin_create_equipment(**values)
@@ -1392,7 +1408,7 @@ class OfficeDeskGearApp(MDApp):
             fields = {"assigned_user_id": self.choice("Сотрудник", people, item.get("assigned_user_id"), target=holder),
                       "desk_id": self.choice("Рабочее место", desks, item.get("desk_id"), target=holder)}
             self.action("Сохранить назначение", lambda: self._assign_save(item, fields), True, target=holder)
-        self.job(lambda: {"users": self.api.admin_list_users(), "desks": self.api.get_desks(limit=200)}, display,
+        self.job(lambda: {"users": self.api.admin_list_users(), "desks": self.api.get_all_desks()}, display,
                  cache_key="assignment-options", cached=display)
 
     def _assign_save(self, item, fields):

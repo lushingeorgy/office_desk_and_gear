@@ -4,7 +4,7 @@ import datetime as dt
 from server.core.time import office_now
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import update, select
 from sqlalchemy.orm import joinedload
 
 from server.models.bookings import Booking
@@ -23,6 +23,16 @@ class BookingRepository(BaseRepository):
         return select(Booking).options(
             joinedload(Booking.desk).load_only(Desk.number, Desk.floor, Desk.section).raiseload("*")
         ).execution_options(populate_existing=True)
+
+    def lock_booking_targets(self, desk_id: int, user_id: int):
+        from server.models.users import User
+
+        # Lock the employee first, then the desk consistently for concurrent requests.
+        self.session.execute(update(User).where(User.id == user_id).values(id=User.id))
+        self.session.execute(update(Desk).where(Desk.id == desk_id).values(is_free=Desk.is_free))
+        return self.session.scalar(
+            select(Desk).where(Desk.id == desk_id).execution_options(populate_existing=True)
+        )
 
     def get_booking_by_id(self, booking_id: Optional[int]) -> Optional[Booking]:
         return self.session.scalar(self._display_query().where(Booking.id == booking_id))

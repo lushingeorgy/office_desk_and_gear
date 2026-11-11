@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import uuid
-import jwt
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, List, Optional
 from urllib.parse import quote
@@ -28,6 +27,7 @@ from server.api.pydantic_schemas import (
     EquipmentResponse,
     LoginRequest,
     MessageResponse,
+    PasswordChangeRequest,
     PasswordResetConfirm,
     PasswordResetRequest,
     QrCodeResponse,
@@ -42,7 +42,7 @@ from server.api.pydantic_schemas import (
 from server.core.config import settings
 from server.core.rate_limit import auth_rate_limit
 from server.core.exceptions import ServiceError
-from server.core.security import hash_token_value, decode_access_token, signing_secret
+from server.core.security import decode_access_token, signing_secret
 from server.database.base import init_db, seed_db
 from server.database.session import get_db, engine
 from server.repositories.auth_repository import AuthRepository
@@ -139,12 +139,11 @@ def _report_service(db: Session) -> ReportService:
 
 UNAUTHORIZED_MISSING = "Требуется авторизация: токен не передан"
 UNAUTHORIZED_BAD_HEADER = "Некорректный заголовок авторизации"
-UNAUTHORIZED_BAD_TOKEN = "Недействительный или истёкший токен"
 FORBIDDEN_MESSAGE = "Недостаточно прав для выполнения операции"
 
 
 def get_current_user(
-    authorization: Optional[str] = Header(default=None, description="Bearer <идентификатор сессии БД>"),
+    authorization: Optional[str] = Header(default=None, description="Bearer <подписанный JWT>"),
     db: Session = Depends(get_db),
 ) -> User:
     if not authorization:
@@ -161,20 +160,7 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    try:
-        claims = decode_access_token(raw_token.strip())
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail=UNAUTHORIZED_BAD_TOKEN) from None
-    user = AuthRepository(db).get_session_user(hash_token_value(raw_token.strip()))
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail=UNAUTHORIZED_BAD_TOKEN
-        )
-    if claims["sub"] != str(user.id):
-        raise HTTPException(status_code=401, detail=UNAUTHORIZED_BAD_TOKEN)
-    if not user.is_verified:
-        raise HTTPException(status_code=403, detail="Подтвердите электронную почту")
-    return user
+    return AuthService(AuthRepository(db), _user_service(db)).authenticate_token(raw_token.strip())
 
 
 def require_roles(*roles: str):
@@ -256,6 +242,16 @@ def get_me(current_user: User = Depends(get_current_user), db: Session = Depends
     return _user_service(db).get_user(current_user.id)
 
 
+@router.post("/users/me/password", dependencies=[Depends(auth_rate_limit)], response_model=MessageResponse, tags=["users"])
+def change_my_password(
+    payload: PasswordChangeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _user_service(db).change_password(current_user.id, payload.current_password, payload.new_password)
+    return MessageResponse(message="Пароль успешно изменён. Войдите с новым паролем")
+
+
 @router.patch("/users/me", response_model=UserResponse, tags=["users"])
 def update_me(
     payload: UserProfileUpdate,
@@ -265,7 +261,7 @@ def update_me(
     return _user_service(db).update_profile(current_user.id, payload)
 
 
-@router.get("/desks", response_model=Optional[List[DeskResponse]], tags=["desks"])
+@router.get("/desks", response_model=List[DeskResponse] | DeskListResponse, tags=["desks"])
 def list_desks(
     response: Response,
     current_user: User = Depends(get_current_user),
@@ -277,18 +273,15 @@ def list_desks(
     offset: int = Query(default=0, ge=0),
     start_at: Optional[dt.datetime] = Query(default=None),
     end_at: Optional[dt.datetime] = Query(default=None),
-    floor: Optional[int] = Query(default=None, description="Этаж"),
-    section: Optional[int] = Query(default=None, description="Секция"),
-    sockets: Optional[int] = Query(default=None, description="Минимальное число розеток"),
+    floor: Optional[int] = Query(default=None, ge=0, description="Этаж"),
+    section: Optional[int] = Query(default=None, gt=0, description="Секция"),
+    sockets: Optional[int] = Query(default=None, ge=0, description="Минимальное число розеток"),
     features: Optional[List[str]] = Query(
         default=None,
         description="Id характеристик: ?features=1&features=2 или ?features=1,2 (совпадение по всем)",
     ),
     db: Session = Depends(get_db),
 ):
-    from server.services.booking_service import _local_datetime
-    if bool(start_at) != bool(end_at) or (start_at and end_at and _local_datetime(start_at) >= _local_datetime(end_at)):
-        raise HTTPException(status_code=422, detail="Укажите начало и конец интервала доступности")
     result = _desk_service(db).filter_desks(
         floor=floor, section=section, sockets=sockets, features=_parse_feature_ids(features), search=search or q, sort=sort, order=order, limit=limit, offset=offset, start_at=start_at, end_at=end_at
     )
@@ -298,11 +291,8 @@ def list_desks(
             soft_filter=True,
             message=result.message,
         )
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content=payload.model_dump(mode="json"),
-            headers={"X-Partial-Match": "true"},
-        )
+        response.headers["X-Partial-Match"] = "true"
+        return payload
     response.headers["X-Partial-Match"] = "false"
     return result.desks
 

@@ -1,4 +1,5 @@
 import threading
+import re
 from functools import partial
 
 from kivy.clock import Clock
@@ -10,18 +11,13 @@ from kivymd.app import MDApp
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDButton, MDButtonIcon, MDButtonText
 from kivymd.uix.label import MDIcon, MDLabel
-from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.scrollview import MDScrollView
-from kivymd.uix.textfield import MDTextField, MDTextFieldHintText, MDTextFieldTrailingIcon
+from kivymd.uix.textfield import MDTextField, MDTextFieldHintText
 
 from client.services.api_client import ApiClient, ApiError
 from client.theme import ACCENT, BACKGROUND, BORDER, ERROR, MUTED, SUCCESS, SURFACE, TEXT, configure_theme
-JOB_ROLES = {
-    "Сотрудник": "employee",
-    "Офис-менеджер": "office_manager",
-    "IT-администратор": "it_admin",
-}
+
 
 
 def label(text, height, size=14, color=TEXT):
@@ -78,17 +74,7 @@ class RegistrationScreen(MDScreen):
             field.bind(text=self._edited, focus=self._on_focus,
                        on_text_validate=partial(self._next_field, len(self.fields)))
             self.fields[key] = field
-            if key == "job_title":
-                field.readonly = True
-                field.keyboard_mode = "managed"
-                field.add_widget(MDTextFieldTrailingIcon(icon="chevron-down"))
-                field.bind(on_touch_down=self._job_touch)
             fields_box.add_widget(field)
-        self.job_menu = MDDropdownMenu(
-            caller=self.fields["job_title"], position="bottom", md_bg_color=SURFACE,
-            items=[{"text": title, "height": dp(56), "on_release": partial(self.select_job, title)}
-                   for title in JOB_ROLES],
-        )
         self.form.add_widget(fields_box)
         self.form.add_widget(label("Пароль — не менее 6 символов", 30, 12, MUTED))
 
@@ -121,26 +107,6 @@ class RegistrationScreen(MDScreen):
     def _edited(self, field, _text):
         field.error = False
 
-    def _job_touch(self, field, touch):
-        if field.disabled or not field.collide_point(*touch.pos) or getattr(touch, "is_mouse_scrolling", False):
-            return False
-        self.open_jobs()
-        return True
-
-    def open_jobs(self, *_args):
-        if self._stopped or self.fields["job_title"].disabled or self.job_menu.parent:
-            return
-        for field in self.fields.values():
-            field.focus = False
-        self.scroll.scroll_to(self.fields["job_title"], padding=dp(24), animate=False)
-        self.job_menu.width = self.fields["job_title"].width
-        self.job_menu.open()
-
-    def select_job(self, title, *_args):
-        if title in JOB_ROLES:
-            self.fields["job_title"].text = title
-            self.job_menu.dismiss()
-
     def _on_focus(self, field, focused):
         if self._focus_event:
             self._focus_event.cancel()
@@ -155,10 +121,7 @@ class RegistrationScreen(MDScreen):
         fields = list(self.fields.values())
         fields[index].focus = False
         if index + 1 < len(fields):
-            if fields[index + 1] is self.fields["job_title"]:
-                Clock.schedule_once(self.open_jobs)
-            else:
-                Clock.schedule_once(lambda _dt: setattr(fields[index + 1], "focus", True))
+            Clock.schedule_once(lambda _dt: setattr(fields[index + 1], "focus", True))
         else:
             self.submit()
 
@@ -190,12 +153,17 @@ class RegistrationScreen(MDScreen):
             return
         values = {name: field.text if name in {"password", "confirm_password"} else field.text.strip()
                   for name, field in self.fields.items()}
-        missing = [name for name, value in values.items() if not value]
+        missing = [name for name, value in values.items() if not value and name != "job_title"]
         if missing:
             self._show_error("Повторите пароль" if missing == ["confirm_password"] else "Заполните все поля", missing)
             return
-        if values["job_title"] not in JOB_ROLES:
-            self._show_error("Выберите должность из списка", ["job_title"])
+        for name, value in values.items():
+            maximum = 1024 if name in {"password", "confirm_password"} else 255
+            if len(value) > maximum:
+                self._show_error(f"Допустимо не более {maximum} символов", [name])
+                return
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", values["email"]):
+            self._show_error("Введите корректный адрес электронной почты", ["email"])
             return
         if len(values["password"]) < 6:
             self._show_error("Пароль должен содержать не менее 6 символов", ["password"])
@@ -203,7 +171,7 @@ class RegistrationScreen(MDScreen):
         if values["password"] != values.pop("confirm_password"):
             self._show_error("Пароли не совпадают", ["confirm_password"])
             return
-        values["role"] = JOB_ROLES[values["job_title"]]
+        values["role"] = "employee"
         self._set_busy(True)
         self.status.text_color = MUTED
         self.status.text = "Сохраняем данные вашего профиля…"
@@ -239,7 +207,6 @@ class RegistrationScreen(MDScreen):
 
     def close(self):
         self._stopped = True
-        self.job_menu.dismiss()
         if self._focus_event:
             self._focus_event.cancel()
 
@@ -262,9 +229,6 @@ class OfficeDeskGearApp(MDApp):
 
     def _on_keyboard(self, _window, key, *_args):
         if key == 27:
-            if self.root.job_menu.parent:
-                self.root.job_menu.dismiss()
-                return True
             focused = [field for field in self.root.fields.values() if field.focus]
             if focused:
                 for field in focused:

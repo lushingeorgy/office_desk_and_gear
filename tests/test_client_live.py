@@ -29,7 +29,7 @@ def launcher():
     import requests
     load_dotenv(ROOT / ".env")
     schema = "client_ui_" + uuid.uuid4().hex
-    artifacts = ROOT / "tests" / "artifacts" / schema
+    artifacts = Path(os.getenv("ODG_UI_ARTIFACTS_ROOT", str(ROOT / "tests" / "artifacts"))) / schema
     artifacts.mkdir(parents=True)
     with socket.socket() as bound:
         bound.bind(("127.0.0.1", 0))
@@ -101,12 +101,15 @@ def server_main():
 
 def gui_main(restored=False):
     from kivy.clock import Clock
+    from kivy.core.window import Window
     from kivymd.uix.button import MDButton
     from client.app import OfficeDeskGearApp
     from client.core.storage import LocalState
     from PIL import Image
 
     directory = Path(os.environ["ODG_UI_ARTIFACTS"])
+    if os.getenv("ODG_HIDE_TEST_WINDOW"):
+        Clock.schedule_once(lambda _dt: Window.hide(), 1)
     app = OfficeDeskGearApp()
     stages, data, errors = [], {}, []
     screenshot_counter = [0]
@@ -176,11 +179,8 @@ def gui_main(restored=False):
                       "password": "Smoke-password-2026", "confirm_password": "Smoke-password-2026"}
             fs = fields({"full_name": "ФИО", "job_title": "Должность", "email": "Рабочая почта",
                          "password": "Пароль от 6 символов", "confirm_password": "Повторите пароль"}, values)
-            role = field("Должность")
-            assert role.readonly and role._choice == "employee"
-            assert {item["text"] for item in role._menu.items} == {"Сотрудник", "Офис-менеджер", "IT-администратор"}
-            choose_menu_option("Должность", "Офис-менеджер")
-            assert role._choice == "office_manager" and role.text == "Офис-менеджер"
+            assert not field("Должность").readonly
+            field("Должность").text = "Специалист"
             snap("registration")
             app._register(fs)
         stage("register through real API", register, lambda: expect_page("verify"))
@@ -210,17 +210,35 @@ def gui_main(restored=False):
         stage("reset password through UI", reset_confirm, lambda: expect_page("login"))
 
         def employee_login():
-            fs = fields({"email": "Рабочая почта", "password": "Пароль"}, {"email": "ui-smoke@company.ru", "password": "New-smoke-password-2026"})
+            fs = fields({"email": "Рабочая почта", "password": "Пароль"},
+                        {"email": "ui-smoke@company.ru", "password": data.get("employee_password", "New-smoke-password-2026")})
             app._login(fs)
         stage("employee login after reset", employee_login, lambda: expect_page("home"))
-        stage("registration menu role survives verification reset and login",
-              lambda: (app.user["role"] == "office_manager" and app.user["job_title"] == "Офис-менеджер"
-                       and app.api.get_me()["role"] == "office_manager" and app.api.get_me()["job_title"] == "Офис-менеджер")
+        stage("public registration remains an employee after verification reset and login",
+              lambda: (app.user["role"] == "employee" and app.user["job_title"] == "Специалист"
+                       and app.api.get_me()["role"] == "employee" and app.api.get_me()["job_title"] == "Специалист")
               or (_ for _ in ()).throw(AssertionError("Selected registration role was not saved")))
         stage("employee profile", app.profile)
 
+        def change_profile_password():
+            assert not any(getattr(widget, "_title", None) == "Должность" for widget in app.body.walk())
+            data["outbox_before_password_change"] = set((directory / "server" / "outbox").glob("*.json"))
+            data["employee_password"] = "Profile-password-2026"
+            fields({"current": "Текущий пароль", "new": "Новый пароль от 6 символов", "confirm": "Повторите новый пароль"},
+                   {"current": "New-smoke-password-2026", "new": data["employee_password"], "confirm": data["employee_password"]})
+            snap("profile")
+            press_button("Изменить пароль")
+
+        def changed_profile_password():
+            expect_page("login")
+            assert app.user is None and app.api.token is None and app.state.account() == (None, None)
+            assert data["outbox_before_password_change"] == set((directory / "server" / "outbox").glob("*.json"))
+        stage("change password from profile without an email code", change_profile_password, changed_profile_password)
+        stage("sign in after profile password change", employee_login, lambda: expect_page("home"))
+        stage("reopen profile after password change", app.profile)
+
         def employee_email_change():
-            fs = fields({"full_name": "ФИО", "email": "Рабочая почта", "job_title": "Должность", "phone": "Телефон"},
+            fs = fields({"full_name": "ФИО", "email": "Рабочая почта", "phone": "Телефон"},
                         {"email": "ui-updated@company.ru"})
             app._profile_save(fs, field("Фото профиля"))
         stage("email change requires new activation and removes cached login", employee_email_change,
@@ -241,8 +259,8 @@ def gui_main(restored=False):
         def profile_save():
             photo = directory / "fixture.png"
             Image.new("RGB", (120, 120), "#8BADFF").save(photo)
-            fs = fields({"full_name": "ФИО", "email": "Рабочая почта", "job_title": "Должность", "phone": "Телефон"},
-                        {"job_title": "IT специалист", "phone": "+7 999 111 22 33"})
+            fs = fields({"full_name": "ФИО", "email": "Рабочая почта", "phone": "Телефон"},
+                        {"phone": "+7 999 111 22 33"})
             field("Фото профиля").text = str(photo)
             app._profile_save(fs, field("Фото профиля"))
         stage("update profile and upload private image", profile_save,
@@ -413,12 +431,17 @@ def gui_main(restored=False):
               lambda: assignment_persisted(None, None, "in_stock"))
         stage("QR display", lambda: app.qr_code(data["equipment"]))
         stage("QR screenshot", lambda: snap("qr"))
-        stage("new ticket", lambda: app.ticket_form(data["equipment"]))
+        stage("ticket creation section", app.tickets)
+        stage("new ticket from the section action", lambda: press_button("Создать заявку"), lambda: expect_page("ticket_form"))
 
         def ticket_save():
+            equipment = field("Оборудование")
+            option = next(item for item in equipment._menu.items if f"№{data['equipment']['inventory_number']}" in item["text"])
+            option["on_release"]()
+            assert equipment._choice == data["equipment"]["id"]
             field("Опишите проблему").text = "Экран мигает после подключения"
             field("Фотография").text = str(directory / "fixture.png")
-            app._ticket_save(data["equipment"], field("Тип неисправности"), field("Опишите проблему"), field("Фотография"))
+            press_button("Отправить заявку")
         stage("ticket with photo through UI", ticket_save, lambda: expect_page("ticket_detail"))
         stage("ticket screenshot", lambda: snap("ticket"))
         stage("own tickets", app.tickets)
@@ -508,6 +531,8 @@ def gui_main(restored=False):
 
     Clock.schedule_interval(step, 0.25)
     app.run()
+    if index[0] < len(stages) and not errors:
+        errors.append("Window closed before all UI checks completed")
     if errors:
         raise AssertionError("; ".join(errors))
     (directory / ("restore-results.json" if restored else "first-results.json")).write_text(

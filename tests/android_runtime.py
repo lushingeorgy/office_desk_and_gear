@@ -437,16 +437,11 @@ class NativeSmoke:
         self.check("Actual ARM64 APK renders the KivyMD login screen", bool(adb("shell", "pidof", PACKAGE, required=False)))
         self.screenshot("cold-login")
         self.click("Создать аккаунт")
-        self.click("Сотрудник")  # Real touch on the readonly job-title field.
-        self.find("Офис-менеджер", timeout=20)
-        self.screenshot("registration-job-menu")
-        self.click("администратор")
-        time.sleep(1)
-        selected = self.screenshot("registration-job-selected")
+        self.fill("Должность", "QA specialist")
+        self.screenshot("registration-job-title")
         self.fatal_check()
-        texts = {item[0] for item in selected}
-        self.check("A real dropdown touch selects the IT job title and dismisses its menu", normalized("администратор") in texts and normalized("Офис-менеджер") not in texts)
-        self.check("Native registration dropdown selection keeps the same app process alive", adb("shell", "pidof", PACKAGE, required=False).split() == [self.last_pid])
+        self.check("Native registration accepts a job title without administrative role selection",
+                   bool(adb("shell", "pidof", PACKAGE, required=False)))
         self.click("У меня уже есть аккаунт", scroll=True)
         self.find("С возвращением")
         self.check("QA build binds its fixed local API without manual settings", self.state().get("api_url") == API_URL)

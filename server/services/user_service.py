@@ -12,11 +12,9 @@ from server.core.security import hash_password, verify_password, hash_token_valu
 from server.dto.user_dto import UserDTO
 from server.models.users import User, ROLES, ROLE_EMPLOYEE
 from server.models.auth import utc_now
-from server.models.auth import EmailVerificationCode
 from server.core.config import settings
 from server.core.exceptions import ForbiddenError, ConflictError
 from server.services.mail_service import send_code
-from sqlalchemy import delete
 from server.repositories.user_repository import UserRepository
 from server.repositories.auth_repository import AuthRepository
 
@@ -80,8 +78,8 @@ class UserService:
 
         role = getattr(payload, "role", DEFAULT_ROLE)
         role = role.value if isinstance(role, Enum) else role
-        if not isinstance(role, str) or role not in ROLES:
-            raise ValidationError("Недопустимая роль пользователя")
+        if role != ROLE_EMPLOYEE:
+            raise ValidationError("При регистрации доступна только роль сотрудника")
         user = User(
             full_name=full_name,
             job_title=(getattr(payload, "job_title", "") or "").strip(),
@@ -90,6 +88,7 @@ class UserService:
             role=role,
             created_at=dt.date.today(),
             is_verified=not settings.REQUIRE_EMAIL_VERIFICATION,
+            bookings=[],
         )
         try:
             self.user_repository.session.add(user)
@@ -127,7 +126,6 @@ class UserService:
 
         full_name = getattr(payload, "full_name", None)
         email = getattr(payload, "email", None)
-        job_title = getattr(payload, "job_title", None)
         for field in ("phone", "avatar_url"):
             value = getattr(payload, field, None)
             if value is not None:
@@ -135,9 +133,6 @@ class UserService:
                     from server.repositories.activity_repository import ActivityRepository
                     ActivityRepository(self.user_repository.session).validate_photo(value, user_id)
                 setattr(user, field, value.strip() or None if field == "avatar_url" else value.strip())
-        if job_title is not None:
-            user.job_title = job_title.strip()
-
         if full_name is not None:
             cleaned = str(full_name).strip()
             if not cleaned:
@@ -163,6 +158,19 @@ class UserService:
 
 
     update_user = update_profile
+
+    def change_password(self, user_id: int, current_password: str, new_password: str) -> None:
+        user = self.user_repository.get_user_by_id(user_id)
+        if user is None:
+            raise NotFoundError("Пользователь не найден")
+        if not verify_password(current_password or "", user.password_hash):
+            raise BadRequestError("Текущий пароль введён неверно")
+        password = _validate_password(new_password)
+        if verify_password(password, user.password_hash):
+            raise BadRequestError("Новый пароль должен отличаться от текущего")
+        user.password_hash = hash_password(password)
+        self.auth_repository.revoke_user_sessions(user.id)
+        self.user_repository.update_user(user)
 
     def set_role(self, user_id: int, role: str) -> UserDTO:
         user = self.user_repository.get_user_by_id(user_id)
@@ -190,7 +198,9 @@ class UserService:
     def _send_verification(self, user: User):
         code = f"{secrets.randbelow(10 ** 6):06d}"
         send_code(user.email, code, "Подтверждение электронной почты")
-        self.user_repository.session.merge(EmailVerificationCode(user_id=user.id, code_hash=hash_token_value(code), expires_at=utc_now() + dt.timedelta(minutes=30)))
+        self.auth_repository.save_verification_code(
+            user.id, hash_token_value(code), utc_now() + dt.timedelta(minutes=30)
+        )
 
     def resend_verification(self, email: str):
         user = self.user_repository.get_user_by_email(_norm_email(email))
@@ -202,8 +212,7 @@ class UserService:
         user = self.user_repository.get_user_by_email(_norm_email(email))
         if user is None:
             raise ValidationError("Неверный или просроченный код подтверждения")
-        result = self.user_repository.session.execute(delete(EmailVerificationCode).where(EmailVerificationCode.user_id == user.id, EmailVerificationCode.code_hash == hash_token_value(code.strip()), EmailVerificationCode.expires_at > utc_now()))
-        if result.rowcount != 1:
+        if not self.auth_repository.consume_verification_code(user.id, hash_token_value(code.strip())):
             raise ValidationError("Неверный или просроченный код подтверждения")
         user.is_verified = True
         self.user_repository.commit()

@@ -129,12 +129,18 @@ class PostgreSQLAcceptance(unittest.TestCase):
         client = client if client is not None else cls.client
         email = f"{label}-{uuid.uuid4().hex}@company.ru"
         payload = {"full_name": "Acceptance " + label, "email": email, "password": PASSWORD, "confirm_password": PASSWORD}
-        if role is not None:
-            payload["role"] = role
         response = client.post(PREFIX + "/auth/register", json=payload)
         if response.status_code != 201:
             raise AssertionError(f"Registration expected 201, got {response.status_code}: {response.text[:500]}")
         user = response.json()
+        if role in {"it_admin", "office_manager"}:
+            # Privileged test fixtures are provisioned through the isolated database.
+            from server.models.users import User
+            with cls.SessionLocal() as session:
+                account = session.get(User, user["id"])
+                account.role = role
+                session.commit()
+            user["role"] = role
         matching = []
         for path in (cls.settings.DATA_DIR / "outbox").glob("*.json"):
             content = json.loads(path.read_text(encoding="utf-8"))
@@ -150,6 +156,12 @@ class PostgreSQLAcceptance(unittest.TestCase):
         if response.status_code != 200:
             raise AssertionError(f"Login failed: {response.status_code}: {response.text[:500]}")
         return user, response.json()["access_token"]
+
+    def setUp(self):
+        # Each scenario gets its own rate-limit window, independent of execution order.
+        from server.core.rate_limit import _attempts, _lock
+        with _lock:
+            _attempts.clear()
 
     def request(self, method, path, expected=200, *, role="employee", token=None, payload=None, **kwargs):
         headers = {} if role is None and token is None else {"Authorization": "Bearer " + (token or self.tokens[role])}
@@ -208,6 +220,71 @@ class PostgreSQLAcceptance(unittest.TestCase):
             session.rollback()
             self.assertEqual("employee", session.get(User, self.users["employee"]["id"]).role)
 
+    def test_02b_unknown_floor_identity_and_location_constraints(self):
+        from sqlalchemy import text
+        from sqlalchemy.exc import IntegrityError
+
+        with self.engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO desks(floor,section,number,is_free) VALUES (NULL,1,981002,true)"
+            ))
+        for values in ("NULL,1,981002", "-1,1,981003", "1,0,981004"):
+            with self.subTest(values=values), self.engine.connect() as connection:
+                with self.assertRaises(IntegrityError), connection.begin():
+                    connection.execute(text(
+                        "INSERT INTO desks(floor,section,number,is_free) VALUES (" + values + ",true)"
+                    ))
+
+    def test_02c_existing_0002_duplicates_stop_migration_without_data_loss(self):
+        from alembic import command
+        from alembic.config import Config
+        from sqlalchemy import text
+
+        schema = "migration_" + uuid.uuid4().hex
+        configuration = Config(str(ROOT / "alembic.ini"))
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+                connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+                configuration.attributes["connection"] = connection
+                command.upgrade(configuration, "0002")
+                connection.execute(text(
+                    "INSERT INTO desks(floor,number,is_free) VALUES (NULL,17,true),(NULL,17,true)"
+                ))
+                with self.assertRaisesRegex(RuntimeError, "Desk integrity migration"):
+                    command.upgrade(configuration, "head")
+                self.assertEqual("0002", connection.scalar(text("SELECT version_num FROM alembic_version")))
+                self.assertEqual(2, connection.scalar(text("SELECT count(*) FROM desks")))
+                connection.execute(text("UPDATE desks SET number=18 WHERE id=(SELECT max(id) FROM desks)"))
+                command.upgrade(configuration, "head")
+                self.assertEqual("0003", connection.scalar(text("SELECT version_num FROM alembic_version")))
+                self.assertEqual(2, connection.scalar(text("SELECT count(*) FROM desks")))
+        finally:
+            with self.engine.begin() as connection:
+                connection.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
+    def test_02d_authentication_does_not_load_booking_history(self):
+        from sqlalchemy import event
+        from server.core.security import hash_token_value
+        from server.repositories.auth_repository import AuthRepository
+        from server.repositories.user_repository import UserRepository
+        from server.dto.user_dto import UserDTO
+
+        statements = []
+        def record(_connection, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+        event.listen(self.engine, "before_cursor_execute", record)
+        try:
+            with self.SessionLocal() as session:
+                user = AuthRepository(session).get_session_user(hash_token_value(self.tokens["employee"]))
+                self.assertNotIn("bookings", user.__dict__)
+                self.assertEqual(1, len(statements))
+                profile = UserRepository(session).get_user_by_id(user.id)
+                self.assertIn("bookings", profile.__dict__)
+                self.assertEqual(user.id, UserDTO.from_user(profile).id)
+        finally:
+            event.remove(self.engine, "before_cursor_execute", record)
+
     def test_03_registration_validation_duplicate_and_invalid_role(self):
         existing = self.users["employee"]["email"]
         self.request("POST", "/auth/register", 409, role=None, payload={"full_name": "Duplicate", "email": existing, "password": PASSWORD, "confirm_password": PASSWORD})
@@ -216,8 +293,13 @@ class PostgreSQLAcceptance(unittest.TestCase):
         self.request("POST", "/auth/register", 422, role=None, payload={"full_name": "Invalid role", "email": f"invalid-role-{uuid.uuid4().hex}@company.ru", "password": PASSWORD, "confirm_password": PASSWORD, "role": "superuser"})
         self.assertEqual("employee", self.users["employee"]["role"], "Omitting a registration role must retain the employee default")
 
-    def test_03b_selected_registration_roles_persist_and_grant_their_permissions(self):
+    def test_03b_provisioned_roles_persist_and_public_registration_cannot_promote(self):
         from server.models.users import User
+        for privileged_role in ("office_manager", "it_admin"):
+            self.request("POST", "/auth/register", 422, role=None, payload={
+                "full_name": "Untrusted registration", "email": f"role-{uuid.uuid4().hex}@company.ru",
+                "password": PASSWORD, "confirm_password": PASSWORD, "role": privileged_role,
+            })
         for role in ("employee", "office_manager", "it_admin"):
             with self.subTest(role=role):
                 user = self.users[role]
@@ -232,8 +314,10 @@ class PostgreSQLAcceptance(unittest.TestCase):
                 self.request("POST", "/admin/desks", 403 if role == "employee" else 201, token=token, payload=desk_payload)
                 equipment_payload = {"type": "Монитор", "model": "Selected-role fixture", "socket_serial": uuid.uuid4().hex, "inventory_number": uuid.uuid4().hex}
                 self.request("POST", "/admin/equipment", 201 if role == "it_admin" else 403, token=token, payload=equipment_payload)
-                changed = self.request("PATCH", "/users/me", token=token, payload={"role": "it_admin" if role == "employee" else "employee"})
+                changed = self.request("PATCH", "/users/me", token=token, payload={
+                    "role": "it_admin" if role == "employee" else "employee", "job_title": "Self-appointed director"})
                 self.assertEqual(role, changed["role"], "The profile endpoint must not change the registration role")
+                self.assertEqual(profile["job_title"], changed["job_title"], "The profile endpoint must not change the position")
                 with self.SessionLocal() as session:
                     self.assertEqual(role, session.get(User, user["id"]).role)
 
@@ -243,7 +327,7 @@ class PostgreSQLAcceptance(unittest.TestCase):
         from server.models.users import User
         from server.repositories.user_repository import UserRepository
         from server.services.user_service import UserService
-        for role in ("superuser", "", None, 42, ["it_admin"], {"role": "it_admin"}):
+        for role in ("it_admin", "office_manager", "superuser", "", None, 42, ["it_admin"], {"role": "it_admin"}):
             with self.subTest(role=role), self.SessionLocal() as session:
                 repository = UserRepository(session)
                 email = f"invalid-service-role-{uuid.uuid4().hex}@company.ru"
@@ -253,8 +337,10 @@ class PostgreSQLAcceptance(unittest.TestCase):
                 self.assertIsNone(repository.get_user_by_email(email))
         with self.SessionLocal() as session:
             service = UserService(UserRepository(session))
-            changed = service.update_profile(self.users["employee"]["id"], SimpleNamespace(role="it_admin"))
+            original_title = session.get(User, self.users["employee"]["id"]).job_title
+            changed = service.update_profile(self.users["employee"]["id"], SimpleNamespace(role="it_admin", job_title="Director"))
             self.assertEqual("employee", changed.role)
+            self.assertEqual(original_title, changed.job_title)
         with self.SessionLocal() as session:
             self.assertEqual("employee", session.get(User, self.users["employee"]["id"]).role)
 
@@ -320,6 +406,24 @@ class PostgreSQLAcceptance(unittest.TestCase):
         self.assertTrue(qr["qr_code_url"].endswith("/" + str(equipment_id)))
         self.request("DELETE", f"/admin/equipment/{equipment_id}", 204, role="it_admin")
         self.request("GET", f"/equipment/{equipment_id}", 404, role="it_admin")
+
+    def test_08a_status_changes_keep_assignments_consistent(self):
+        self.request("POST", "/admin/equipment", 422, role="it_admin", payload={
+            "type": "Monitor", "status": "assigned",
+        })
+        self.request("POST", "/admin/equipment", 422, role="it_admin", payload={
+            "type": "Monitor", "status": "written_off", "assigned_user_id": self.users["employee"]["id"],
+        })
+        equipment = self.create_equipment(assigned_user_id=self.users["employee"]["id"])
+        path = f"/admin/equipment/{equipment['id']}"
+        for status in ("in_stock", "written_off"):
+            self.request("PATCH", path, 422, role="it_admin", payload={"status": status})
+            current = self.request("GET", f"/equipment/{equipment['id']}", role="it_admin")
+            self.assertEqual("assigned", current["status"])
+            self.assertEqual(self.users["employee"]["id"], current["assigned_user_id"])
+        self.request("PATCH", path + "/assign", role="it_admin", payload={"assigned_user_id": None})
+        self.request("PATCH", path, 422, role="it_admin", payload={"status": "assigned"})
+        self.request("PATCH", path, role="it_admin", payload={"status": "written_off"})
 
     def test_08b_client_assignment_and_explicit_removal_persist(self):
         from client.services.api_client import ApiClient
@@ -558,6 +662,36 @@ class PostgreSQLAcceptance(unittest.TestCase):
         response = self.client.post(PREFIX + "/auth/password-reset/confirm", json={"email": user["email"], "code": code, "new_password": new_password, "password_confirm": new_password})
         self.assertIn(response.status_code, {400, 409, 422})
 
+    def test_12b_authenticated_password_change_needs_current_password_and_no_email_code(self):
+        from fastapi.testclient import TestClient
+        with TestClient(self.app, client=("password-change-fixture", 50002)) as fixture:
+            user, first_token = self.register_user("password-change", client=fixture)
+        second_token = self.request("POST", "/auth/login", role=None,
+                                    payload={"email": user["email"], "password": PASSWORD})["access_token"]
+        new_password = PASSWORD + "-profile"
+        payload = {"current_password": PASSWORD, "new_password": new_password}
+        self.request("POST", "/users/me/password", 401, role=None, payload=payload)
+        self.request("POST", "/users/me/password", 400, token=first_token,
+                     payload=dict(payload, current_password="incorrect-password"))
+        self.request("POST", "/users/me/password", 400, token=first_token,
+                     payload=dict(payload, new_password=PASSWORD))
+        self.request("POST", "/users/me/password", 422, token=first_token,
+                     payload=dict(payload, new_password="short"))
+        self.request("GET", "/users/me", token=first_token)
+        before = set((self.settings.DATA_DIR / "outbox").glob("*.json"))
+        self.request("POST", "/users/me/password", token=first_token, payload=payload)
+        self.assertEqual(before, set((self.settings.DATA_DIR / "outbox").glob("*.json")),
+                         "Changing the password must not send an email code")
+        for token in (first_token, second_token):
+            self.request("GET", "/users/me", 401, token=token)
+        self.request("POST", "/auth/login", 401, role=None,
+                     payload={"email": user["email"], "password": PASSWORD})
+        login = self.request("POST", "/auth/login", role=None,
+                             payload={"email": user["email"], "password": new_password})
+        profile = self.request("GET", "/users/me", token=login["access_token"])
+        self.assertTrue(profile["is_verified"])
+        self.assertEqual(user["email"], profile["email"])
+
     def test_13_analytics_validation_and_role_access(self):
         report = self.request("GET", "/admin/analytics", role="office_manager")
         self.assertIn("occupancy_rate", report)
@@ -780,6 +914,14 @@ class PostgreSQLAcceptance(unittest.TestCase):
         for params in invalid:
             with self.subTest(params=params):
                 self.request("GET", "/desks", 422, params=params)
+
+    def test_24e_public_authentication_is_rate_limited(self):
+        payload = {"email": "rate-limit-invalid", "password": PASSWORD}
+        for _ in range(30):
+            self.request("POST", "/auth/login", 422, role=None, payload=payload)
+        response = self.client.post(PREFIX + "/auth/login", json=payload)
+        self.assertEqual(429, response.status_code)
+        self.assertEqual("60", response.headers.get("Retry-After"))
 
     def test_25_changed_email_requires_confirmation_before_next_login(self):
         new_email = f"changed-{uuid.uuid4().hex}@company.ru"

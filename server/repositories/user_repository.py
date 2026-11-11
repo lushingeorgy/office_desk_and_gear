@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from server.models.users import User
 from server.repositories.base_repository import BaseRepository
@@ -10,20 +11,20 @@ from server.repositories.base_repository import BaseRepository
 
 class UserRepository(BaseRepository):
     def get_user_by_id(self, user_id: Optional[int]) -> Optional[User]:
-        return self.get(User, user_id)
+        return self.session.scalar(select(User).options(selectinload(User.bookings)).where(User.id == user_id))
 
     def get_user_by_email(self, email: Optional[str]) -> Optional[User]:
         if not email:
             return None
-        stmt = select(User).where(User.email == str(email).strip().lower())
+        stmt = select(User).options(selectinload(User.bookings)).where(User.email == str(email).strip().lower())
         return self.session.execute(stmt).scalars().first()
 
     def get_all_users(self) -> List[User]:
-        stmt = select(User).order_by(User.full_name, User.id)
+        stmt = select(User).options(selectinload(User.bookings)).order_by(User.full_name, User.id)
         return list(self.session.execute(stmt).scalars().all())
 
     def get_users_by_role(self, role: str) -> List[User]:
-        return list(self.session.scalars(select(User).where(User.role == role)))
+        return list(self.session.scalars(select(User).options(selectinload(User.bookings)).where(User.role == role)))
 
     def create_user(self, user: User) -> User:
         return self.add(user)

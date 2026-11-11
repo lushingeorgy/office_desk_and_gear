@@ -4,12 +4,9 @@ import datetime as dt
 from server.core.time import office_now
 from typing import Any, Optional
 
-from sqlalchemy import update
 from zoneinfo import ZoneInfo
 from server.core.config import settings
 from server.models.activity import Notification
-from server.models.desks import Desk
-from server.models.users import User
 
 from server.core.exceptions import (
     ConflictError,
@@ -57,16 +54,11 @@ class BookingService:
         return desk
 
     def _lock_and_check_availability(self, desk_id: int, user_id: int) -> None:
-        db = self.booking_repository.session
-
-
-        db.execute(update(User).where(User.id == user_id).values(id=User.id))
-        db.execute(update(Desk).where(Desk.id == desk_id).values(is_free=Desk.is_free))
-        desk = self._ensure_desk(desk_id)
-        if desk is not None:
-            db.refresh(desk)
-            if not desk.is_free:
-                raise ConflictError("Рабочее место сейчас занято или недоступно. Обновите схему этажа")
+        desk = self.booking_repository.lock_booking_targets(desk_id, user_id)
+        if desk is None:
+            raise NotFoundError("Рабочее место не найдено")
+        if not desk.is_free:
+            raise ConflictError("Рабочее место сейчас занято или недоступно. Обновите схему этажа")
 
     @staticmethod
     def _duration(duration_hours: Any) -> dt.timedelta:

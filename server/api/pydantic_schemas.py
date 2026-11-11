@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Literal, Optional
 
 from pydantic import AliasChoices, AfterValidator, BaseModel, ConfigDict, Field, model_validator
 import re
@@ -32,6 +32,7 @@ __all__ = [
     "MessageResponse",
     "PasswordResetRequest",
     "PasswordResetConfirm",
+    "PasswordChangeRequest",
     "UserProfileUpdate",
     "UserResponse",
     "DeskCreate",
@@ -56,12 +57,6 @@ __all__ = [
 ]
 
 
-class UserRole(str, Enum):
-    employee = "employee"
-    office_manager = "office_manager"
-    it_admin = "it_admin"
-
-
 class UserCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -69,7 +64,7 @@ class UserCreate(BaseModel):
     job_title: str = Field(default="", max_length=255)
     email: EmailAddress
     password: str = Field(min_length=6, max_length=1024)
-    role: UserRole = UserRole.employee
+    role: Literal["employee"] = "employee"
     confirm_password: str = Field(min_length=6, max_length=1024)
 
     @model_validator(mode="after")
@@ -114,11 +109,17 @@ class PasswordResetConfirm(BaseModel):
     new_password: str = Field(min_length=6, max_length=1024)
 
 
+class PasswordChangeRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=6, max_length=1024)
+
+
 class UserProfileUpdate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     full_name: Optional[str] = Field(default=None, min_length=1, max_length=255)
-    job_title: Optional[str] = Field(default=None, max_length=255)
     email: Optional[EmailAddress] = None
     phone: Optional[str] = Field(default=None, max_length=40)
     avatar_url: Optional[str] = Field(default=None, max_length=1024)
@@ -131,8 +132,8 @@ class UserResponse(UserDTO):
 class DeskCreate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    floor: Optional[int] = None
-    section: Optional[int] = None
+    floor: Optional[int] = Field(default=None, ge=0)
+    section: Optional[int] = Field(default=None, gt=0)
     number: int = Field(gt=0)
     is_free: bool = True
     sockets: Optional[int] = Field(default=None, ge=0)
@@ -142,8 +143,8 @@ class DeskCreate(BaseModel):
 class DeskUpdate(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    floor: Optional[int] = None
-    section: Optional[int] = None
+    floor: Optional[int] = Field(default=None, ge=0)
+    section: Optional[int] = Field(default=None, gt=0)
     number: Optional[int] = Field(default=None, gt=0)
     is_free: Optional[bool] = None
     sockets: Optional[int] = Field(default=None, ge=0)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Sequence
 
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import String, cast, exists, or_, select
 from sqlalchemy.orm import selectinload
 
 from server.models.desks import Desk
@@ -70,6 +70,15 @@ class DeskRepository(BaseRepository):
 
     def update_desk(self, desk: Desk) -> Desk:
         return self.save(desk)
+
+    def has_references(self, desk_id: int) -> bool:
+        from server.models.bookings import Booking
+        from server.models.equipment import Equipment
+
+        return bool(self.session.scalar(select(
+            exists().where(Booking.desk_id == desk_id)
+            | exists().where(Equipment.desk_id == desk_id)
+        )))
 
     def delete_desk(self, desk_id: int) -> bool:
         desk = self.get_desk_by_id(desk_id)

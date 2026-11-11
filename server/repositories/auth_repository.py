@@ -2,7 +2,7 @@ import datetime as dt
 
 from sqlalchemy import delete, select
 
-from server.models.auth import AuthSession, PasswordResetCode, utc_now
+from server.models.auth import AuthSession, EmailVerificationCode, PasswordResetCode, utc_now
 from server.models.users import User
 from server.repositories.base_repository import BaseRepository
 
@@ -29,6 +29,17 @@ class AuthRepository(BaseRepository):
         self.session.execute(delete(PasswordResetCode).where(PasswordResetCode.expires_at <= utc_now()))
         self.session.merge(PasswordResetCode(user_id=user_id, code_hash=code_hash, expires_at=expires_at))
         self.commit()
+
+    def save_verification_code(self, user_id: int, code_hash: str, expires_at: dt.datetime):
+        self.session.merge(EmailVerificationCode(user_id=user_id, code_hash=code_hash, expires_at=expires_at))
+
+    def consume_verification_code(self, user_id: int, code_hash: str) -> bool:
+        result = self.session.execute(delete(EmailVerificationCode).where(
+            EmailVerificationCode.user_id == user_id,
+            EmailVerificationCode.code_hash == code_hash,
+            EmailVerificationCode.expires_at > utc_now(),
+        ))
+        return result.rowcount == 1
 
     def consume_reset_code(self, user_id: int, code_hash: str) -> bool:
         result = self.session.execute(delete(PasswordResetCode).where(

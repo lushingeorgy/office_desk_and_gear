@@ -70,6 +70,11 @@ class DeskService:
         search: Optional[str] = None, sort: str = "number", order: str = "asc", limit: int = 100, offset: int = 0,
         start_at=None, end_at=None,
     ) -> DeskListResult:
+        from server.services.booking_service import _local_datetime
+        if bool(start_at) != bool(end_at) or (
+            start_at and end_at and _local_datetime(start_at) >= _local_datetime(end_at)
+        ):
+            raise ValidationError("Укажите начало и конец интервала доступности")
         requested = [int(value) for value in (features or [])]
         found = self.desk_repository.get_desks_filtered(
             floor=floor, section=section, sockets=sockets, features=requested, search=search, sort=sort, order=order, limit=limit, offset=offset
@@ -168,11 +173,7 @@ class DeskService:
         desk = self.desk_repository.get_desk_by_id(desk_id)
         if desk is None:
             raise NotFoundError("Рабочее место не найдено")
-        from sqlalchemy import select, exists
-        from server.models.bookings import Booking
-        from server.models.equipment import Equipment
-        db = self.desk_repository.session
-        if db.scalar(select(exists().where(Booking.desk_id == desk_id))) or db.scalar(select(exists().where(Equipment.desk_id == desk_id))):
+        if self.desk_repository.has_references(desk_id):
             raise ConflictError("Нельзя удалить стол с историей броней или закреплённым оборудованием. Сделайте его недоступным")
         return self.desk_repository.delete_desk(desk_id)
 

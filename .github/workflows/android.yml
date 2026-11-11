@@ -1,6 +1,9 @@
 name: Android APK
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['buildozer.spec']
   pull_request:
     paths:
       - 'client/**'

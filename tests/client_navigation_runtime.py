@@ -513,6 +513,39 @@ class NavigationCheck(OfficeDeskGearApp):
             self.worker.complete({"active": None, "user": dict(USER), "desk": None})
         self.steps.append(("camera preview rotates clockwise and preserves all four corners", inspect_camera_preview))
 
+        def validate_form_boundaries():
+            from types import SimpleNamespace
+            self.equipment_form()
+            self.worker.complete([])
+            names = {"type": "Тип оборудования", "model": "Модель", "socket_serial": "Серийный номер",
+                     "inventory_number": "Инвентарный номер"}
+            fields = {key: self.field_named(title) for key, title in names.items()}
+            socket, status = SimpleNamespace(_choice=False), SimpleNamespace(_choice="in_stock")
+            for key in fields:
+                for field in fields.values():
+                    field.text = "Valid"
+                fields[key].text = "x" * 129
+                with patch.object(self, "mutate") as send:
+                    self._equipment_save({}, fields, socket, status)
+                    self.check(not send.called and fields[key].error, "Equipment overflow reached API: " + key)
+                fields[key].text = "x" * 128
+                with patch.object(self, "mutate") as send:
+                    self._equipment_save({}, fields, socket, status)
+                    self.check(send.called, "Valid equipment boundary rejected: " + key)
+            self.desk_form({"id": 99, "number": 1, "floor": 0, "section": 1, "sockets": 0})
+            self.worker.complete([])
+            fields = {key: self.field_named(title) for key, title in
+                      (("number", "Номер стола"), ("floor", "Этаж"), ("section", "Секция"), ("sockets", "Число розеток"))}
+            with patch.object(self, "mutate") as send:
+                self._desk_save({"id": 99}, fields, SimpleNamespace(_choice=True), SimpleNamespace(selected=set()))
+                self.check(send.called, "Ground-floor desk cannot be saved")
+            secret = self.field("Test secret", "  password  ", secret=True)
+            secret.password = False
+            self.check(self.values({"secret": secret})["secret"] == "  password  ", "Visible password changed")
+            self.home()
+            self.worker.complete({"active": None, "user": dict(USER), "desk": None})
+        self.steps.append(("form limits reject overflow before HTTP and support floor zero", validate_form_boundaries))
+
         def pause_and_logout():
             self.on_pause()
             self.on_resume()

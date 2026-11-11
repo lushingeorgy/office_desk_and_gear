@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import joinedload
 
 from server.models.desks import Desk
@@ -71,6 +71,11 @@ class EquipmentRepository(BaseRepository):
     def update_equipment(self, equipment: Equipment) -> Equipment:
         self.save(equipment)
         return self.get_equipment_by_id(equipment.id)
+
+    def has_tickets(self, equipment_id: int) -> bool:
+        from server.models.tickets import Ticket
+
+        return bool(self.session.scalar(select(exists().where(Ticket.equipment_id == equipment_id))))
 
     def delete_equipment(self, equipment_id: int) -> bool:
         equipment = self.get_equipment_by_id(equipment_id)

@@ -73,6 +73,16 @@ class EquipmentService:
         return [EquipmentDTO.from_equipment(item) for item in ordered]
 
 
+    @staticmethod
+    def _validate_assignment_status(status, assigned_user_id, desk_id):
+        if status not in EQUIPMENT_STATUSES:
+            raise ValidationError("Недопустимый статус техники")
+        has_assignment = assigned_user_id is not None or desk_id is not None
+        if has_assignment and status in {STATUS_IN_STOCK, "written_off"}:
+            raise ValidationError("Сначала снимите закрепление техники перед отправкой на склад или списанием")
+        if status == STATUS_ASSIGNED and not has_assignment:
+            raise ValidationError("Для статуса «выдано» сначала назначьте сотрудника или рабочее место")
+
     def create_equipment(self, payload: Any) -> EquipmentDTO:
         type_name = str(getattr(payload, "type", "") or "").strip()
         if not type_name:
@@ -96,10 +106,7 @@ class EquipmentService:
         status = getattr(payload, "status", None) or (
             STATUS_ASSIGNED if assigned_user_id is not None or desk_id is not None else STATUS_IN_STOCK
         )
-        if status not in EQUIPMENT_STATUSES:
-            raise ValidationError("Недопустимый статус техники")
-        if status == STATUS_IN_STOCK and (assigned_user_id is not None or desk_id is not None):
-            raise ValidationError("Закреплённая техника не может иметь статус «на складе»")
+        self._validate_assignment_status(status, assigned_user_id, desk_id)
 
         item = Equipment(
             desk_id=desk_id,
@@ -150,6 +157,7 @@ class EquipmentService:
             raise NotFoundError("Единица техники не найдена")
         data = payload.model_dump(exclude_none=True) if hasattr(payload, "model_dump") else dict(payload)
         data.pop("id", None)
+        self._validate_assignment_status(data.get("status", item.status), item.assigned_user_id, item.desk_id)
         for field in ("model", "inventory_number"):
             if field in data:
                 setattr(item, field, data[field])
@@ -179,9 +187,7 @@ class EquipmentService:
         item = self.equipment_repository.get_equipment_by_id(equipment_id)
         if item is None:
             raise NotFoundError("Единица техники не найдена")
-        from sqlalchemy import select, exists
-        from server.models.tickets import Ticket
-        if self.equipment_repository.session.scalar(select(exists().where(Ticket.equipment_id == equipment_id))):
+        if self.equipment_repository.has_tickets(equipment_id):
             raise ConflictError("Нельзя удалить технику с историей обращений. Используйте статус списания")
         return self.equipment_repository.delete_equipment(equipment_id)
 

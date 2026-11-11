@@ -3,7 +3,8 @@ import secrets
 import jwt
 
 from server.core.config import settings
-from server.core.security import hash_token_value, signing_secret
+from server.core.exceptions import ForbiddenError, UnauthorizedError
+from server.core.security import decode_access_token, hash_token_value, signing_secret
 from server.models.auth import utc_now
 from server.repositories.auth_repository import AuthRepository
 from server.services.user_service import UserService
@@ -27,3 +28,19 @@ class AuthService:
 
     def logout(self, session_id: str):
         self.repository.revoke_session(hash_token_value(session_id))
+
+    def authenticate_token(self, token: str):
+        try:
+            claims = decode_access_token(token)
+        except jwt.InvalidTokenError:
+            raise UnauthorizedError(
+                "Недействительный или истёкший токен", headers={"WWW-Authenticate": "Bearer"}
+            ) from None
+        user = self.repository.get_session_user(hash_token_value(token))
+        if user is None or claims["sub"] != str(user.id):
+            raise UnauthorizedError(
+                "Недействительный или истёкший токен", headers={"WWW-Authenticate": "Bearer"}
+            )
+        if not user.is_verified:
+            raise ForbiddenError("Подтвердите электронную почту")
+        return user

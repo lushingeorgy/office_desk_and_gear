@@ -186,7 +186,7 @@ class RemoteSuite(NativeSmoke):
             'Создать аккаунт':['ФИО','Должность','Рабочая почта','Пароль от 6 символов','Повторите пароль'],
             'Подтвердить почту':['Код подтверждения'],
             'Восстановить пароль':['Рабочая почта','Код из письма','Новый пароль от 6 символов','Повторите новый пароль'],
-            'Мой профиль':['ФИО','Рабочая почта','Должность','Телефон','Фото профиля'],
+            'Мой профиль':['ФИО','Рабочая почта','Телефон','Фото профиля','Текущий пароль','Новый пароль от 6 символов','Повторите новый пароль'],
             'Рабочие места':['Поиск по номеру стола','Дата'],
             'Фильтры столов':['Этаж','Секция','Минимум розеток','Сортировать по','Порядок'],
             'Новое рабочее место':['Номер стола','Этаж','Секция','Число розеток','Доступность'],
@@ -198,7 +198,7 @@ class RemoteSuite(NativeSmoke):
             'Изменить бронь':['Дата и время начала','Часов в день'],
             'Закрепление техники':['Сотрудник','Рабочее место'],
             'Сотрудники и роли':['Роль'],
-            'Сообщить о проблеме':['Тип неисправности','Опишите проблему','Фотография'],
+            'Новая заявка':['Оборудование','Тип неисправности','Опишите проблему','Фотография'],
             'Сканировать QR-код':['Код или ID устройства'],
             'Сканировать':['Код или ID устройства'],
         }
@@ -251,7 +251,8 @@ class RemoteSuite(NativeSmoke):
         self.click('Создать аккаунт')
         self.find('ФИО')
         self.fill('ФИО',name)
-        self.select('Должность',{'employee':'Сотрудник','office_manager':'Офис-менеджер','it_admin':'администратор'}[role])
+        assert role == 'employee', 'Public registration must create an employee'
+        self.fill('Должность','QA specialist')
         self.fill('Рабочая почта',actor['email'])
         self.fill('Пароль от 6 символов',actor['password'])
         self.fill('Повторите пароль',actor['password'])
@@ -264,6 +265,19 @@ class RemoteSuite(NativeSmoke):
         actor['id']=state['user']['id']
 
     def fixture_actor(self,role):
+        if role != 'employee':
+            prefix = 'ODG_REMOTE_' + role.upper()
+            email, password = os.getenv(prefix + '_EMAIL'), os.getenv(prefix + '_PASSWORD')
+            if not email or not password:
+                raise RuntimeError('Provision a staging ' + role + ' and supply ' + prefix + '_EMAIL/_PASSWORD')
+            with ApiClient(DEFAULT_API_URL) as api:
+                token = api.login(email, password)
+                api.set_token(token['access_token'])
+                user = api.get_me()
+            assert user['role'] == role and user['is_verified']
+            self.actors[role] = {'name': user['full_name'], 'email': email, 'password': password,
+                                 'role': role, 'id': user['id']}
+            return
         name={'employee':'QAEmployee','office_manager':'QAManager','it_admin':'QAAdmin'}[role]+self.tag
         actor={'name':name,'email':role.replace('_','')+'-'+self.tag+'@example.invalid',
                'password':'Qa-'+secrets.token_hex(10),'role':role}
@@ -484,10 +498,13 @@ class RemoteSuite(NativeSmoke):
         self.primary()
         self.find('Laptop')
 
+    def new_ticket_form(self):
+        self.click('Заявки')
+        self.click('Создать заявку',scroll=True)
+        self.select('Оборудование','QA'+self.tag+'A')
+
     def ticket(self):
-        self.click('Техника')
-        self.click(str(self.ids['equipment'])+' Laptop',scroll=True)
-        self.click('Сообщить о проблеме',scroll=True)
+        self.new_ticket_form()
         self.select('Тип неисправности','Программная ошибка')
         self.fill('Опишите проблему','QATicket'+self.tag)
         self.primary()
@@ -519,8 +536,7 @@ class RemoteSuite(NativeSmoke):
         adb('push',str(fixture.resolve()),'/sdcard/Download/ODG-gallery-fixture.png')
         adb('shell','am','broadcast','-a','android.intent.action.MEDIA_SCANNER_SCAN_FILE',
             '-d','file:///sdcard/Download/ODG-gallery-fixture.png',required=False)
-        self.click('Техника');self.click(str(self.ids['equipment'])+' Laptop',scroll=True)
-        self.click('Сообщить о проблеме',scroll=True)
+        self.new_ticket_form()
         self.fill('Опишите проблему','QAGallery'+self.tag)
         self.press('Выбрать фото из галереи');time.sleep(2)
         picked=False
@@ -735,10 +751,10 @@ def main():
             suite.save(True)
             return
         for role in ('employee','office_manager','it_admin'):
-            if args.scope=='operations':
+            if args.scope=='operations' or role != 'employee':
                 suite.fixture_actor(role)
             else:
-                suite.stage('Registration and selected role '+role,lambda role=role:suite.register(role))
+                suite.stage('Public employee registration',lambda:suite.register('employee'))
                 if role=='employee':
                     suite.stage('Profile update persists on remote server',suite.profile)
                     suite.stage('Emulated camera capture upload and private viewer',suite.photo)

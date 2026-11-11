@@ -15,8 +15,10 @@ desk_feature_links = Table("desk_feature_links", Base.metadata,
 class Desk(Base):
     __tablename__ = "desks"
     __table_args__ = (
-        UniqueConstraint("floor", "number", name="uq_desks_floor_number"),
+        UniqueConstraint("floor", "number", name="uq_desks_floor_number", postgresql_nulls_not_distinct=True),
         CheckConstraint("number > 0", name="ck_desks_number"),
+        CheckConstraint("floor IS NULL OR floor >= 0", name="ck_desks_floor"),
+        CheckConstraint("section IS NULL OR section > 0", name="ck_desks_section"),
         CheckConstraint("sockets IS NULL OR sockets >= 0", name="ck_desks_sockets"),
     )
 

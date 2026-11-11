@@ -208,6 +208,14 @@ class ApiClient:
     def get_desk_features(self):
         return self._request("GET", "/desk-features")
 
+    def get_all_desks(self):
+        desks = []
+        while True:
+            batch = self.get_desks(limit=200, offset=len(desks)) or []
+            desks.extend(batch)
+            if len(batch) < 200:
+                return desks
+
     def get_desk(self, desk_id):
         return self._request("GET", f"/desks/{desk_id}")
 
