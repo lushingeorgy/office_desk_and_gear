@@ -183,7 +183,7 @@ class RemoteSuite(NativeSmoke):
         # form use its actual paired outline edges and documented field order.
         layouts={
             'С возвращением':['Рабочая почта','Пароль'],
-            'Создать аккаунт':['ФИО','Должность','Роль','Рабочая почта','Пароль от 6 символов','Повторите пароль'],
+            'Создать аккаунт':['ФИО','Роль','Рабочая почта','Пароль от 6 символов','Повторите пароль'],
             'Восстановить пароль':['Рабочая почта','Код из письма','Новый пароль от 6 символов','Повторите новый пароль'],
             'Мой профиль':['ФИО','Рабочая почта','Телефон','Фото профиля','Текущий пароль','Новый пароль от 6 символов','Повторите новый пароль'],
             'Рабочие места':['Поиск по номеру стола','Дата'],
@@ -249,8 +249,8 @@ class RemoteSuite(NativeSmoke):
         actor={'name':name,'email':role.replace('_','')+'-'+self.tag+'@example.invalid','password':'Qa-'+secrets.token_hex(10),'role':role}
         self.click('Создать аккаунт')
         self.find('ФИО')
+        assert all(text != normalized('Должность') for text,_,_ in self.ready_words()), 'Separate job-title input remains'
         self.fill('ФИО',name)
-        self.fill('Должность','QA specialist')
         self.select('Роль',{'employee':'Сотрудник','office_manager':'Офис-менеджер','it_admin':'IT-администратор'}[role])
         self.fill('Рабочая почта',actor['email'])
         self.fill('Пароль от 6 символов',actor['password'])
@@ -269,7 +269,7 @@ class RemoteSuite(NativeSmoke):
                'password':'Qa-'+secrets.token_hex(10),'role':role}
         api=ApiClient(DEFAULT_API_URL)
         try:
-            user=api.register(full_name=name,job_title=role,email=actor['email'],password=actor['password'],role=role)
+            user=api.register(full_name=name,email=actor['email'],password=actor['password'],role=role)
             assert user['role']==role
             actor['id']=user['id'];self.actors[role]=actor
         finally: api.close()

@@ -437,13 +437,16 @@ class NativeSmoke:
         self.check("Actual ARM64 APK renders the KivyMD login screen", bool(adb("shell", "pidof", PACKAGE, required=False)))
         self.screenshot("cold-login")
         self.click("Создать аккаунт")
-        self.fill("Должность", "QA specialist")
-        self.click("Роль", scroll=True)
+        registration_words = self.screenshot("registration-role")
+        self.check("Native registration has no separate job-title input",
+                   all(text != normalized("Должность") for text, _, _ in registration_words))
+        self.click("Сотрудник", scroll=True)
+        self.find("Сотрудник")
         self.find("Офис-менеджер")
         self.click("IT-администратор")
-        self.screenshot("registration-job-title")
+        self.screenshot("registration-selected-role")
         self.fatal_check()
-        self.check("Native registration accepts a job title and offers all three roles",
+        self.check("Native registration offers all three roles in the role selector",
                    bool(adb("shell", "pidof", PACKAGE, required=False)))
         self.click("У меня уже есть аккаунт", scroll=True)
         self.find("С возвращением")

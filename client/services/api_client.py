@@ -142,11 +142,11 @@ class ApiClient:
             pending.extend(cause.args)
         return "Нет соединения с сервером. Проверьте сеть и повторите попытку позже"
 
-    def register(self, full_name, email, password, role="employee", job_title="", confirm_password=None):
+    def register(self, full_name, email, password, role="employee", confirm_password=None):
         return self._request("POST", "/auth/register", json={
             "full_name": full_name.strip(), "email": email.strip().lower(),
             "password": password, "confirm_password": confirm_password or password,
-            "role": role, "job_title": job_title.strip(),
+            "role": role,
         })
 
     def check_connection(self):

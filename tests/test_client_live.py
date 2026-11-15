@@ -175,7 +175,8 @@ def gui_main(restored=False):
 
         def register_role(role, title):
             password = "Smoke-password-2026"
-            fs = fields({"full_name": "ФИО", "job_title": "Должность", "role": "Роль", "email": "Рабочая почта",
+            assert_registration_fields()
+            fs = fields({"full_name": "ФИО", "role": "Роль", "email": "Рабочая почта",
                          "password": "Пароль от 6 символов", "confirm_password": "Повторите пароль"},
                         {"full_name": "UI " + title, "email": role + "@ui-smoke.example.org",
                          "password": password, "confirm_password": password})
@@ -201,15 +202,20 @@ def gui_main(restored=False):
             stage("logout " + role, app.logout, lambda: expect_page("login"))
         stage("registration view", app.register)
 
+        def assert_registration_fields():
+            titles = [getattr(widget, "_title", None) for widget in app.body.walk()]
+            assert titles.count("Роль") == 1
+            assert "Должность" not in titles
+            assert field("Роль").readonly
+            assert [item["text"] for item in field("Роль")._menu.items] == ["Сотрудник", "Офис-менеджер", "IT-администратор"]
+
         def register():
             values = {"full_name": "UI Smoke Employee", "email": "ui-smoke@company.ru",
                       "password": "Smoke-password-2026", "confirm_password": "Smoke-password-2026"}
-            fs = fields({"full_name": "ФИО", "job_title": "Должность", "role": "Роль", "email": "Рабочая почта",
+            fs = fields({"full_name": "ФИО", "role": "Роль", "email": "Рабочая почта",
                          "password": "Пароль от 6 символов", "confirm_password": "Повторите пароль"}, values)
-            assert not field("Должность").readonly
-            field("Должность").text = "Специалист"
-            assert [item["text"] for item in field("Роль")._menu.items] == ["Сотрудник", "Офис-менеджер", "IT-администратор"]
-            assert field("Роль").readonly and field("Роль")._choice == "employee"
+            assert_registration_fields()
+            assert field("Роль")._choice == "employee"
             snap("registration")
             app._register(fs)
         stage("register through real API without email confirmation", register, lambda: expect_page("login"))
@@ -239,8 +245,7 @@ def gui_main(restored=False):
             app._login(fs)
         stage("employee login after reset", employee_login, lambda: expect_page("home"))
         stage("selected registration role survives password reset and login",
-              lambda: (app.user["role"] == "employee" and app.user["job_title"] == "Специалист"
-                       and app.api.get_me()["role"] == "employee" and app.api.get_me()["job_title"] == "Специалист")
+              lambda: (app.user["role"] == "employee" and app.api.get_me()["role"] == "employee")
               or (_ for _ in ()).throw(AssertionError("Selected registration role was not saved")))
         stage("employee profile", app.profile)
 

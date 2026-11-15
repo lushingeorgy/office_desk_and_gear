@@ -582,7 +582,6 @@ class OfficeDeskGearApp(MDApp):
     def register(self):
         self.page_start("register", "Создать аккаунт", "Укажите рабочую почту и данные профиля.")
         fields = {"full_name": self.field("ФИО", required=True)}
-        fields["job_title"] = self.field("Должность")
         fields["role"] = self.choice("Роль", ROLES, "employee")
         fields.update({"email": self.field("Рабочая почта", required=True, kind="email"),
                   "password": self.field("Пароль от 6 символов", required=True, secret=True),
@@ -595,7 +594,6 @@ class OfficeDeskGearApp(MDApp):
         if not values:
             return
         values["role"] = fields["role"]._choice
-        values["job_title"] = values["job_title"] or ""
         if len(values["password"]) < 6 or values["password"] != values["confirm_password"]:
             fields["confirm_password"].error = True
             self.note("Пароль — от 6 символов. Пароли должны совпадать", error=True)

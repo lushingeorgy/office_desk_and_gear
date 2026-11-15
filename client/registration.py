@@ -60,7 +60,7 @@ class RegistrationScreen(MDScreen):
 
         fields_box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(20))
         self.fields = {}
-        for key, title in (("full_name", "ФИО"), ("job_title", "Должность"), ("email", "Рабочая почта"),
+        for key, title in (("full_name", "ФИО"), ("email", "Рабочая почта"),
                            ("password", "Пароль"), ("confirm_password", "Повторите пароль")):
             secret = key in {"password", "confirm_password"}
             field = MDTextField(
@@ -189,7 +189,7 @@ class RegistrationScreen(MDScreen):
             return
         values = {name: field.text if name in {"password", "confirm_password"} else field.text.strip()
                   for name, field in self.fields.items()}
-        missing = [name for name, value in values.items() if not value and name != "job_title"]
+        missing = [name for name, value in values.items() if not value]
         if missing:
             self._show_error("Повторите пароль" if missing == ["confirm_password"] else "Заполните все поля", missing)
             return
