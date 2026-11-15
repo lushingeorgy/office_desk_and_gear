@@ -50,7 +50,7 @@ def launch() -> int:
         data_dir = ROOT / "tests" / "artifacts" / schema
         data_dir.mkdir(parents=True, exist_ok=True)
         environment = dict(os.environ, PGOPTIONS=f"-csearch_path={schema}", ODG_BENCHMARK_SCHEMA=schema,
-                           ODG_SEED="0", APP_ENV="test", ENVIRONMENT="test", REQUIRE_EMAIL_VERIFICATION="0", MAIL_MODE="outbox",
+                           ODG_SEED="0", APP_ENV="test", ENVIRONMENT="test", MAIL_MODE="outbox",
                            JWT_SECRET=secrets.token_urlsafe(48), DATA_DIR=str(data_dir), PYTHONIOENCODING="utf-8")
         return subprocess.run([sys.executable, str(Path(__file__).resolve()), "--worker"], cwd=ROOT, env=environment).returncode
     finally:
@@ -79,7 +79,7 @@ def seed_database():
     shared_hash = hash_password(PASSWORD)
     with SessionLocal.begin() as session:
         users = [User(full_name=f"Benchmark employee {index}", email=f"bench-{index}@company.ru", password_hash=shared_hash,
-                      role="it_admin" if index == 98 else "office_manager" if index == 99 else "employee", is_verified=True)
+                      role="it_admin" if index == 98 else "office_manager" if index == 99 else "employee")
                  for index in range(100)]
         session.add_all(users)
         session.flush()

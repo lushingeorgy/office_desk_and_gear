@@ -28,7 +28,6 @@ jobs:
       APP_ENV: test
       ENVIRONMENT: test
       JWT_SECRET: runtime-ci-only-signing-secret-minimum-32-characters
-      REQUIRE_EMAIL_VERIFICATION: '1'
       MAIL_MODE: outbox
       TZ: Europe/Moscow
     steps:

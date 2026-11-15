@@ -99,7 +99,7 @@ def serve(port: int, duration_seconds: int) -> None:
             PGOPTIONS=f"-csearch_path={schema}",
             APP_ENV="test", ENVIRONMENT="test", ODG_SEED="0",
             JWT_SECRET=secrets.token_urlsafe(48), DATA_DIR=str(directory),
-            REQUIRE_EMAIL_VERIFICATION="0", MAIL_MODE="outbox",
+            MAIL_MODE="outbox",
             HOST="127.0.0.1", PORT=str(port),
         )
         from alembic import command

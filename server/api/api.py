@@ -62,7 +62,7 @@ from server.services.equipment_service import EquipmentService
 from server.services.report_service import ReportService
 from server.services.ticket_service import TicketService
 from server.services.user_service import UserService
-from server.api.pydantic_schemas import EmailVerify, RoleUpdate, TicketCommentCreate, UploadCreate, EquipmentUpdate
+from server.api.pydantic_schemas import RoleUpdate, TicketCommentCreate, UploadCreate, EquipmentUpdate
 from server.repositories.activity_repository import ActivityRepository
 from server.services.activity_service import ActivityService
 from server.dto.report_dto import ReportDTO
@@ -73,8 +73,6 @@ from server.dto.activity_dto import NotificationResponse, TicketEventResponse, U
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         signing_secret()
-        if settings.ENVIRONMENT == "production" and (not settings.SMTP_HOST or settings.MAIL_MODE != "smtp"):
-            raise RuntimeError("Production email verification requires SMTP configuration")
         init_db()
         if settings.SEED_ON_START:
             if settings.ENVIRONMENT == "production":
@@ -518,18 +516,6 @@ def admin_get_analytics(
 @router.get("/admin/users", response_model=List[UserResponse], tags=["admin: users"])
 def admin_list_users(_user: User = Depends(VIEW_REPORTS), db: Session = Depends(get_db)):
     return _user_service(db).get_all_users()
-
-
-@router.post("/auth/verify-email", dependencies=[Depends(auth_rate_limit)], response_model=MessageResponse, tags=["auth"])
-def verify_email(payload: EmailVerify, db: Session = Depends(get_db)):
-    _user_service(db).verify_email(payload.email, payload.code)
-    return MessageResponse(message="Почта подтверждена. Войдите в приложение")
-
-
-@router.post("/auth/resend-verification", dependencies=[Depends(auth_rate_limit)], response_model=MessageResponse, tags=["auth"])
-def resend_verification(payload: PasswordResetRequest, db: Session = Depends(get_db)):
-    _user_service(db).resend_verification(payload.email)
-    return MessageResponse(message="Если подтверждение требуется, код отправлен на почту")
 
 
 @router.patch("/admin/users/{user_id}/role", response_model=UserResponse, tags=["admin: users"])

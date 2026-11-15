@@ -227,7 +227,7 @@ def run_isolated() -> int:
                                PGCONNECT_TIMEOUT="5",
                                ODG_BACKUP_DATABASE=name, ODG_BACKUP_WORK=str(working.resolve()), ODG_SEED="0",
                                APP_ENV="test", ENVIRONMENT="test", JWT_SECRET=signing_secret,
-                               REQUIRE_EMAIL_VERIFICATION="0", MAIL_MODE="outbox", SQL_ECHO="0",
+                               MAIL_MODE="outbox", SQL_ECHO="0",
                                DATA_DIR=str((working / folder).resolve()), PYTHONIOENCODING="utf-8")
             environments.append(environment)
 

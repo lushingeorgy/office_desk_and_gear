@@ -64,7 +64,7 @@ class UserCreate(BaseModel):
     job_title: str = Field(default="", max_length=255)
     email: EmailAddress
     password: str = Field(min_length=6, max_length=1024)
-    role: Literal["employee"] = "employee"
+    role: Literal["employee", "office_manager", "it_admin"] = "employee"
     confirm_password: str = Field(min_length=6, max_length=1024)
 
     @model_validator(mode="after")
@@ -232,11 +232,6 @@ class TicketCreate(BaseModel):
         serialization_alias="photo_url",
         max_length=1024,
     )
-
-
-class EmailVerify(BaseModel):
-    email: EmailAddress
-    code: str = Field(pattern="^[0-9]{6}$")
 
 
 class RoleUpdate(BaseModel):

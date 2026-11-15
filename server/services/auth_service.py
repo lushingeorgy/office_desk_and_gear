@@ -3,7 +3,7 @@ import secrets
 import jwt
 
 from server.core.config import settings
-from server.core.exceptions import ForbiddenError, UnauthorizedError
+from server.core.exceptions import UnauthorizedError
 from server.core.security import decode_access_token, hash_token_value, signing_secret
 from server.models.auth import utc_now
 from server.repositories.auth_repository import AuthRepository
@@ -41,6 +41,4 @@ class AuthService:
             raise UnauthorizedError(
                 "Недействительный или истёкший токен", headers={"WWW-Authenticate": "Bearer"}
             )
-        if not user.is_verified:
-            raise ForbiddenError("Подтвердите электронную почту")
         return user

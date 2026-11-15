@@ -41,7 +41,7 @@ def launcher():
                        DSH_API_URL=url, APP_ROOT_PATH="/office-desk-gear", QR_BASE_URL=url + "/equipment",
                        ODG_CLIENT_DATA=str(artifacts / "device"), KIVY_HOME=str(ROOT / "tests" / "_kivy_home"),
                        ENVIRONMENT="test", APP_ENV="test", JWT_SECRET=secrets.token_urlsafe(48),
-                       REQUIRE_EMAIL_VERIFICATION="1", MAIL_MODE="outbox", ODG_SEED="0", PYTHONIOENCODING="utf-8",
+                       MAIL_MODE="outbox", ODG_SEED="0", PYTHONIOENCODING="utf-8",
                        ODG_UI_ARTIFACTS=str(artifacts), ODG_UI_PORT=str(port))
     environment["KIVY_NO_ARGS"] = "1"
     server = None
@@ -172,29 +172,53 @@ def gui_main(restored=False):
     else:
         stage("initial layout", lambda: None)
         stage("login initial", lambda: (expect_page("login"), snap("login")))
+
+        def register_role(role, title):
+            password = "Smoke-password-2026"
+            fs = fields({"full_name": "ФИО", "job_title": "Должность", "role": "Роль", "email": "Рабочая почта",
+                         "password": "Пароль от 6 символов", "confirm_password": "Повторите пароль"},
+                        {"full_name": "UI " + title, "email": role + "@ui-smoke.example.org",
+                         "password": password, "confirm_password": password})
+            choose_menu_option("Роль", title)
+            assert fs["role"]._choice == role
+            app._register(fs)
+
+        def login_role(role):
+            app._login(fields({"email": "Рабочая почта", "password": "Пароль"},
+                              {"email": role + "@ui-smoke.example.org", "password": "Smoke-password-2026"}))
+
+        def check_role(role):
+            expect_page("home")
+            assert app.user["role"] == role
+            assert app.api.get_me()["role"] == role
+
+        for role, title in (("office_manager", "Офис-менеджер"), ("it_admin", "IT-администратор")):
+            stage(role + " registration view", app.register)
+            stage("register selected " + role, lambda role=role, title=title: register_role(role, title),
+                  lambda: expect_page("login"))
+            stage("immediate login for " + role, lambda role=role: login_role(role),
+                  lambda role=role: check_role(role))
+            stage("logout " + role, app.logout, lambda: expect_page("login"))
         stage("registration view", app.register)
 
         def register():
             values = {"full_name": "UI Smoke Employee", "email": "ui-smoke@company.ru",
                       "password": "Smoke-password-2026", "confirm_password": "Smoke-password-2026"}
-            fs = fields({"full_name": "ФИО", "job_title": "Должность", "email": "Рабочая почта",
+            fs = fields({"full_name": "ФИО", "job_title": "Должность", "role": "Роль", "email": "Рабочая почта",
                          "password": "Пароль от 6 символов", "confirm_password": "Повторите пароль"}, values)
             assert not field("Должность").readonly
             field("Должность").text = "Специалист"
+            assert [item["text"] for item in field("Роль")._menu.items] == ["Сотрудник", "Офис-менеджер", "IT-администратор"]
+            assert field("Роль").readonly and field("Роль")._choice == "employee"
             snap("registration")
             app._register(fs)
-        stage("register through real API", register, lambda: expect_page("verify"))
-        stage("return to login before activation", app.login)
+        stage("register through real API without email confirmation", register, lambda: expect_page("login"))
 
-        def unverified_login():
+        def immediate_login():
             fs = fields({"email": "Рабочая почта", "password": "Пароль"}, {"email": "ui-smoke@company.ru", "password": "Smoke-password-2026"})
             app._login(fs)
-        stage("unverified login returns to activation", unverified_login, lambda: expect_page("verify"))
-
-        def verify_registration():
-            field("Код подтверждения").text = code_for("ui-smoke@company.ru", "Подтверждение")
-            app._verify("ui-smoke@company.ru", field("Код подтверждения"))
-        stage("activate using delivered email code", verify_registration, lambda: expect_page("login"))
+        stage("new account can sign in immediately", immediate_login, lambda: expect_page("home"))
+        stage("logout before password reset", app.logout, lambda: expect_page("login"))
         stage("reset password form", app.reset)
 
         def reset_request():
@@ -214,7 +238,7 @@ def gui_main(restored=False):
                         {"email": "ui-smoke@company.ru", "password": data.get("employee_password", "New-smoke-password-2026")})
             app._login(fs)
         stage("employee login after reset", employee_login, lambda: expect_page("home"))
-        stage("public registration remains an employee after verification reset and login",
+        stage("selected registration role survives password reset and login",
               lambda: (app.user["role"] == "employee" and app.user["job_title"] == "Специалист"
                        and app.api.get_me()["role"] == "employee" and app.api.get_me()["job_title"] == "Специалист")
               or (_ for _ in ()).throw(AssertionError("Selected registration role was not saved")))
@@ -241,13 +265,14 @@ def gui_main(restored=False):
             fs = fields({"full_name": "ФИО", "email": "Рабочая почта", "phone": "Телефон"},
                         {"email": "ui-updated@company.ru"})
             app._profile_save(fs, field("Фото профиля"))
-        stage("email change requires new activation and removes cached login", employee_email_change,
-              lambda: (expect_page("verify"), app.user is None or (_ for _ in ()).throw(AssertionError("Unverified account remains active"))))
 
-        def verify_changed_email():
-            field("Код подтверждения").text = code_for("ui-updated@company.ru", "Подтверждение")
-            app._verify("ui-updated@company.ru", field("Код подтверждения"))
-        stage("activate changed address", verify_changed_email, lambda: expect_page("login"))
+        def changed_employee_email():
+            expect_page("profile")
+            assert app.user["email"] == "ui-updated@company.ru"
+            assert app.state.account()[1]["email"] == "ui-updated@company.ru"
+        stage("email change preserves the active session", employee_email_change,
+              changed_employee_email)
+        stage("logout after changing address", app.logout, lambda: expect_page("login"))
 
         def login():
             fs = fields({"email": "Рабочая почта", "password": "Пароль"}, {"email": "it@company.ru", "password": "password123"})

@@ -1,4 +1,4 @@
-"""Positive email-code UI flows against the isolated CI API, never remote secrets."""
+"""Registration and password-reset UI flows against the isolated CI API."""
 from __future__ import annotations
 import argparse
 import json
@@ -19,7 +19,7 @@ class AuthSuite(RemoteSuite):
         super().__init__(directory)
         self.sensitive=False
         self.raw_directory=Path(tempfile.mkdtemp(prefix='odg-auth-private-',dir=os.getenv('RUNNER_TEMP')))
-        self.email='verify-'+self.tag+'@example.invalid'
+        self.email='auth-'+self.tag+'@example.invalid'
         self.password='Qa-'+secrets.token_hex(10)
 
     def screenshot(self,label):
@@ -37,10 +37,10 @@ class AuthSuite(RemoteSuite):
 
     def save(self,passed):
         (self.directory/'result.json').write_text(json.dumps({'passed':passed,
-            'kind':'QA APK and isolated PostgreSQL API with email verification enabled',
+            'kind':'QA APK and isolated PostgreSQL API without registration email confirmation',
             'checks':self.results},ensure_ascii=False,indent=2),encoding='utf-8')
 
-    def code(self,purpose='Подтверждение электронной почты'):
+    def code(self,purpose='Восстановление пароля'):
         from server.core.config import settings
         end=time.monotonic()+15
         while time.monotonic()<end:
@@ -51,26 +51,19 @@ class AuthSuite(RemoteSuite):
             time.sleep(.3)
         raise AssertionError('Isolated outbox message missing')
 
-    def verify_current(self):
-        self.find('Подтвердить почту')
-        self.sensitive=True
-        self.fill('Код подтверждения',self.code())
-        self.primary()
-        self.find('Почта подтверждена')
-        self.sensitive=False
-
     def registration(self):
         self.click('Создать аккаунт')
-        for label,value in (('ФИО','QAVerify'+self.tag),('Рабочая почта',self.email),
+        for label,value in (('ФИО','QAAuth'+self.tag),('Рабочая почта',self.email),
                             ('Пароль от 6 символов',self.password),('Повторите пароль',self.password)):
             self.fill(label,value)
+        self.select('Роль','IT-администратор')
         self.primary()
-        self.verify_current()
+        self.find('Профиль создан')
 
     def enter(self):
         self.fill('Рабочая почта',self.email); self.fill('Пароль',self.password)
         self.primary(); self.find('Быстрые действия',timeout=50,scroll=True)
-        assert self.state()['user']['is_verified']
+        assert self.state()['user']['role']=='it_admin'
 
     def reset_password(self):
         self.enter(); self.logout()
@@ -91,9 +84,9 @@ class AuthSuite(RemoteSuite):
         self.home(); self.open_profile()
         self.email='changed-'+self.tag+'@example.invalid'
         self.fill('Рабочая почта',self.email)
-        self.primary(); self.find('Новая почта ожидает подтверждения')
-        assert not self.state().get('credential')
-        self.verify_current(); self.enter(); self.logout()
+        self.primary(); self.find('Профиль сохранён')
+        assert self.state().get('credential') and self.state()['user']['email']==self.email
+        self.logout(); self.enter(); self.logout()
 
 
 def main():
@@ -102,11 +95,11 @@ def main():
     args=parser.parse_args(); suite=AuthSuite(args.output)
     try:
         from server.core.config import settings
-        assert settings.ENVIRONMENT=='test' and settings.MAIL_MODE=='outbox' and settings.REQUIRE_EMAIL_VERIFICATION
+        assert settings.ENVIRONMENT=='test' and settings.MAIL_MODE=='outbox'
         suite.launch(); suite.find('С возвращением',timeout=90)
-        suite.stage('Registration and email-code confirmation',suite.registration)
+        suite.stage('Registration with selected role and no email confirmation',suite.registration)
         suite.stage('Reset password by email code and sign in again',suite.reset_password)
-        suite.stage('Changed email revokes session and needs confirmation',suite.change_email)
+        suite.stage('Changed email preserves session and supports a new login',suite.change_email)
         suite.save(True)
     finally:
         import shutil

@@ -20,8 +20,8 @@ from server.services.user_service import UserService
 
 
 class PublicRegistrationTests(unittest.TestCase):
-    def test_privileged_roles_are_rejected_by_schema_and_direct_service(self):
-        for role in ("office_manager", "it_admin", "superuser", None, ""):
+    def test_unknown_roles_are_rejected_by_schema_and_direct_service(self):
+        for role in ("superuser", None, ""):
             with self.subTest(role=role):
                 payload = dict(full_name="New employee", email="new@example.org", password="Password-2026",
                                confirm_password="Password-2026", role=role)
@@ -38,6 +38,13 @@ class PublicRegistrationTests(unittest.TestCase):
         payload = UserCreate(full_name="New employee", email="new@example.org", password="Password-2026",
                              confirm_password="Password-2026")
         self.assertEqual("employee", payload.role)
+
+    def test_all_three_registration_roles_are_supported(self):
+        for role in ("employee", "office_manager", "it_admin"):
+            with self.subTest(role=role):
+                payload = UserCreate(full_name="New user", email="new@example.org", password="Password-2026",
+                                     confirm_password="Password-2026", role=role)
+                self.assertEqual(role, payload.role)
 
 
 class DeskContractTests(unittest.TestCase):

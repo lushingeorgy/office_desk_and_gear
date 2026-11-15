@@ -319,12 +319,6 @@ class ApiClient:
         return self._request("GET", "/admin/tickets")
 
 
-    def verify_email(self, email, code):
-        return self._request("POST", "/auth/verify-email", json={"email": email, "code": code})
-
-    def resend_verification(self, email):
-        return self._request("POST", "/auth/resend-verification", json={"email": email})
-
     def update_booking(self, booking_id, desk_id, planed_at, duration_hours):
         return self._request("PUT", f"/bookings/{booking_id}", json={
             "desk_id": desk_id, "planed_at": planed_at, "duration_hours": duration_hours})

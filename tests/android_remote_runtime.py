@@ -183,8 +183,7 @@ class RemoteSuite(NativeSmoke):
         # form use its actual paired outline edges and documented field order.
         layouts={
             'С возвращением':['Рабочая почта','Пароль'],
-            'Создать аккаунт':['ФИО','Должность','Рабочая почта','Пароль от 6 символов','Повторите пароль'],
-            'Подтвердить почту':['Код подтверждения'],
+            'Создать аккаунт':['ФИО','Должность','Роль','Рабочая почта','Пароль от 6 символов','Повторите пароль'],
             'Восстановить пароль':['Рабочая почта','Код из письма','Новый пароль от 6 символов','Повторите новый пароль'],
             'Мой профиль':['ФИО','Рабочая почта','Телефон','Фото профиля','Текущий пароль','Новый пароль от 6 символов','Повторите новый пароль'],
             'Рабочие места':['Поиск по номеру стола','Дата'],
@@ -251,8 +250,8 @@ class RemoteSuite(NativeSmoke):
         self.click('Создать аккаунт')
         self.find('ФИО')
         self.fill('ФИО',name)
-        assert role == 'employee', 'Public registration must create an employee'
         self.fill('Должность','QA specialist')
+        self.select('Роль',{'employee':'Сотрудник','office_manager':'Офис-менеджер','it_admin':'IT-администратор'}[role])
         self.fill('Рабочая почта',actor['email'])
         self.fill('Пароль от 6 символов',actor['password'])
         self.fill('Повторите пароль',actor['password'])
@@ -261,30 +260,17 @@ class RemoteSuite(NativeSmoke):
         self.actors[role]=actor
         self.login(role)
         state=self.state()
-        assert state['user']['role']==role and state['user']['is_verified']
+        assert state['user']['role']==role
         actor['id']=state['user']['id']
 
     def fixture_actor(self,role):
-        if role != 'employee':
-            prefix = 'ODG_REMOTE_' + role.upper()
-            email, password = os.getenv(prefix + '_EMAIL'), os.getenv(prefix + '_PASSWORD')
-            if not email or not password:
-                raise RuntimeError('Provision a staging ' + role + ' and supply ' + prefix + '_EMAIL/_PASSWORD')
-            with ApiClient(DEFAULT_API_URL) as api:
-                token = api.login(email, password)
-                api.set_token(token['access_token'])
-                user = api.get_me()
-            assert user['role'] == role and user['is_verified']
-            self.actors[role] = {'name': user['full_name'], 'email': email, 'password': password,
-                                 'role': role, 'id': user['id']}
-            return
         name={'employee':'QAEmployee','office_manager':'QAManager','it_admin':'QAAdmin'}[role]+self.tag
         actor={'name':name,'email':role.replace('_','')+'-'+self.tag+'@example.invalid',
                'password':'Qa-'+secrets.token_hex(10),'role':role}
         api=ApiClient(DEFAULT_API_URL)
         try:
             user=api.register(full_name=name,job_title=role,email=actor['email'],password=actor['password'],role=role)
-            assert user['role']==role and user['is_verified']
+            assert user['role']==role
             actor['id']=user['id'];self.actors[role]=actor
         finally: api.close()
 
@@ -708,10 +694,6 @@ class RemoteSuite(NativeSmoke):
         self.top(); self.click('Получить код',scroll=True)
         self.find('восстановления')
         self.press('Ко входу')
-        self.fill('Рабочая почта',self.actors['employee']['email'])
-        self.click('Подтвердить рабочую почту')
-        self.find('Подтвердить почту')
-        self.press('Ко входу')
 
     def allow_permission(self):
         focus=adb('shell','dumpsys','window','displays')
@@ -751,10 +733,10 @@ def main():
             suite.save(True)
             return
         for role in ('employee','office_manager','it_admin'):
-            if args.scope=='operations' or role != 'employee':
+            if args.scope=='operations':
                 suite.fixture_actor(role)
             else:
-                suite.stage('Public employee registration',lambda:suite.register('employee'))
+                suite.stage('Public '+role+' registration',lambda role=role:suite.register(role))
                 if role=='employee':
                     suite.stage('Profile update persists on remote server',suite.profile)
                     suite.stage('Emulated camera capture upload and private viewer',suite.photo)
@@ -791,7 +773,7 @@ def main():
         suite.logout(); suite.login('employee')
         suite.stage('Read server notifications',suite.notifications)
         suite.stage('Final logout removes session and cache',suite.logout)
-        suite.stage('Password reset and verification screens',suite.reset_screen)
+        suite.stage('Password reset screen',suite.reset_screen)
         suite.stage('Current desk map resets page date and incompatible features',suite.home_map_context)
         suite.stage('Home-map fixture logout clears session and cache',suite.logout)
         passed=all(result['status']=='PASS' for result in suite.results)

@@ -25,7 +25,6 @@ class Settings:
         self.DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "server" / "data")))
         self.SESSION_EXPIRE_MINUTES = int(os.getenv("SESSION_EXPIRE_MINUTES", "43200"))
         self.OFFICE_TIMEZONE = os.getenv("OFFICE_TIMEZONE", "Europe/Moscow")
-        self.REQUIRE_EMAIL_VERIFICATION = os.getenv("REQUIRE_EMAIL_VERIFICATION", "1" if self.ENVIRONMENT == "production" else "0").lower() in {"1", "true"}
         self.MAIL_MODE = os.getenv("MAIL_MODE", "smtp" if self.ENVIRONMENT == "production" else "outbox")
         self.SMTP_HOST = os.getenv("SMTP_HOST", "")
         self.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))

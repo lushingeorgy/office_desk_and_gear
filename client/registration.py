@@ -11,11 +11,13 @@ from kivymd.app import MDApp
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDButton, MDButtonIcon, MDButtonText
 from kivymd.uix.label import MDIcon, MDLabel
+from kivymd.uix.menu import MDDropdownMenu
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.scrollview import MDScrollView
 from kivymd.uix.textfield import MDTextField, MDTextFieldHintText
 
 from client.services.api_client import ApiClient, ApiError
+from client.core.roles import ROLES
 from client.theme import ACCENT, BACKGROUND, BORDER, ERROR, MUTED, SUCCESS, SURFACE, TEXT, configure_theme
 
 
@@ -77,6 +79,21 @@ class RegistrationScreen(MDScreen):
             fields_box.add_widget(field)
         self.form.add_widget(fields_box)
         self.form.add_widget(label("Пароль — не менее 6 символов", 30, 12, MUTED))
+        self.role = "employee"
+        self.role_field = MDTextField(
+            MDTextFieldHintText(text="Роль", text_color_normal=MUTED, text_color_focus=ACCENT),
+            text=ROLES[self.role], mode="outlined", size_hint_y=None, height=dp(56),
+            radius=[dp(10)], multiline=False, readonly=True, keyboard_mode="managed",
+            theme_text_color="Custom", text_color_normal=TEXT, text_color_focus=TEXT,
+            theme_line_color="Custom", line_color_normal=BORDER, line_color_focus=ACCENT,
+        )
+        self.role_menu = MDDropdownMenu(
+            caller=self.role_field, position="bottom", md_bg_color=SURFACE,
+            items=[{"text": title, "height": dp(56), "on_release": partial(self._choose_role, key)}
+                   for key, title in ROLES.items()],
+        )
+        self.role_field.bind(on_touch_down=self._role_touch)
+        self.form.add_widget(self.role_field)
 
         self.password_label = MDButtonText(text="Показать пароли", theme_text_color="Custom", text_color=MUTED)
         self.password_icon = MDButtonIcon(icon="eye-outline", theme_icon_color="Custom", icon_color=MUTED)
@@ -107,6 +124,22 @@ class RegistrationScreen(MDScreen):
     def _edited(self, field, _text):
         field.error = False
 
+    def _role_touch(self, field, touch):
+        if (not field.disabled and field.collide_point(*touch.pos)
+                and not getattr(touch, "is_mouse_scrolling", False)):
+            for item in self.fields.values():
+                item.focus = False
+            field.focus = False
+            self.role_menu.width = field.width
+            self.role_menu.open()
+            return True
+        return False
+
+    def _choose_role(self, role, *_args):
+        self.role = role
+        self.role_field.text = ROLES[role]
+        self.role_menu.dismiss()
+
     def _on_focus(self, field, focused):
         if self._focus_event:
             self._focus_event.cancel()
@@ -136,6 +169,9 @@ class RegistrationScreen(MDScreen):
         self.submit_button.disabled = busy
         self.submit_label.text = "Создание аккаунта…" if busy else "Создать аккаунт"
         self.password_toggle.disabled = busy
+        self.role_field.disabled = busy
+        if busy:
+            self.role_menu.dismiss()
         for field in self.fields.values():
             field.disabled = busy
             if busy:
@@ -171,7 +207,7 @@ class RegistrationScreen(MDScreen):
         if values["password"] != values.pop("confirm_password"):
             self._show_error("Пароли не совпадают", ["confirm_password"])
             return
-        values["role"] = "employee"
+        values["role"] = self.role
         self._set_busy(True)
         self.status.text_color = MUTED
         self.status.text = "Сохраняем данные вашего профиля…"
@@ -203,10 +239,12 @@ class RegistrationScreen(MDScreen):
                 self.fields[name].password = True
             self.password_label.text = "Показать пароли"
             self.password_icon.icon = "eye-outline"
+            self._choose_role("employee")
         Clock.schedule_once(lambda _dt: self.scroll.scroll_to(self.submit_button, padding=dp(24), animate=False))
 
     def close(self):
         self._stopped = True
+        self.role_menu.dismiss()
         if self._focus_event:
             self._focus_event.cancel()
 

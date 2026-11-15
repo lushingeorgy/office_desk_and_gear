@@ -51,7 +51,6 @@ def run_isolated() -> int:
             APP_ENV="test",
             ENVIRONMENT="test",
             JWT_SECRET=secrets.token_urlsafe(48),
-            REQUIRE_EMAIL_VERIFICATION="1",
             MAIL_MODE="outbox",
             DATA_DIR=str(data_dir),
             PYTHONIOENCODING="utf-8",
@@ -129,29 +128,17 @@ class PostgreSQLAcceptance(unittest.TestCase):
         client = client if client is not None else cls.client
         email = f"{label}-{uuid.uuid4().hex}@company.ru"
         payload = {"full_name": "Acceptance " + label, "email": email, "password": PASSWORD, "confirm_password": PASSWORD}
+        if role is not None:
+            payload["role"] = role
+        before = set((cls.settings.DATA_DIR / "outbox").glob("*.json"))
         response = client.post(PREFIX + "/auth/register", json=payload)
         if response.status_code != 201:
             raise AssertionError(f"Registration expected 201, got {response.status_code}: {response.text[:500]}")
         user = response.json()
-        if role in {"it_admin", "office_manager"}:
-            # Privileged test fixtures are provisioned through the isolated database.
-            from server.models.users import User
-            with cls.SessionLocal() as session:
-                account = session.get(User, user["id"])
-                account.role = role
-                session.commit()
-            user["role"] = role
-        matching = []
-        for path in (cls.settings.DATA_DIR / "outbox").glob("*.json"):
-            content = json.loads(path.read_text(encoding="utf-8"))
-            if content.get("email") == email:
-                matching.append((path.stat().st_mtime_ns, content))
-        if not matching:
-            raise AssertionError("Registration did not produce a verification message in the test outbox")
-        code = max(matching, key=lambda item: item[0])[1]["code"]
-        response = client.post(PREFIX + "/auth/verify-email", json={"email": email, "code": code})
-        if response.status_code != 200:
-            raise AssertionError(f"Email verification failed: {response.status_code}: {response.text[:500]}")
+        if before != set((cls.settings.DATA_DIR / "outbox").glob("*.json")):
+            raise AssertionError("Registration must not send an email")
+        if "is_verified" in user:
+            raise AssertionError("Registration must not expose the removed email-verification state")
         response = client.post(PREFIX + "/auth/login", json={"email": email, "password": PASSWORD})
         if response.status_code != 200:
             raise AssertionError(f"Login failed: {response.status_code}: {response.text[:500]}")
@@ -257,7 +244,7 @@ class PostgreSQLAcceptance(unittest.TestCase):
                 self.assertEqual(2, connection.scalar(text("SELECT count(*) FROM desks")))
                 connection.execute(text("UPDATE desks SET number=18 WHERE id=(SELECT max(id) FROM desks)"))
                 command.upgrade(configuration, "head")
-                self.assertEqual("0003", connection.scalar(text("SELECT version_num FROM alembic_version")))
+                self.assertEqual("0004", connection.scalar(text("SELECT version_num FROM alembic_version")))
                 self.assertEqual(2, connection.scalar(text("SELECT count(*) FROM desks")))
         finally:
             with self.engine.begin() as connection:
@@ -293,13 +280,8 @@ class PostgreSQLAcceptance(unittest.TestCase):
         self.request("POST", "/auth/register", 422, role=None, payload={"full_name": "Invalid role", "email": f"invalid-role-{uuid.uuid4().hex}@company.ru", "password": PASSWORD, "confirm_password": PASSWORD, "role": "superuser"})
         self.assertEqual("employee", self.users["employee"]["role"], "Omitting a registration role must retain the employee default")
 
-    def test_03b_provisioned_roles_persist_and_public_registration_cannot_promote(self):
+    def test_03b_selected_registration_roles_persist_and_grant_expected_access(self):
         from server.models.users import User
-        for privileged_role in ("office_manager", "it_admin"):
-            self.request("POST", "/auth/register", 422, role=None, payload={
-                "full_name": "Untrusted registration", "email": f"role-{uuid.uuid4().hex}@company.ru",
-                "password": PASSWORD, "confirm_password": PASSWORD, "role": privileged_role,
-            })
         for role in ("employee", "office_manager", "it_admin"):
             with self.subTest(role=role):
                 user = self.users[role]
@@ -327,7 +309,7 @@ class PostgreSQLAcceptance(unittest.TestCase):
         from server.models.users import User
         from server.repositories.user_repository import UserRepository
         from server.services.user_service import UserService
-        for role in ("it_admin", "office_manager", "superuser", "", None, 42, ["it_admin"], {"role": "it_admin"}):
+        for role in ("superuser", "", None, 42, ["it_admin"], {"role": "it_admin"}):
             with self.subTest(role=role), self.SessionLocal() as session:
                 repository = UserRepository(session)
                 email = f"invalid-service-role-{uuid.uuid4().hex}@company.ru"
@@ -689,7 +671,7 @@ class PostgreSQLAcceptance(unittest.TestCase):
         login = self.request("POST", "/auth/login", role=None,
                              payload={"email": user["email"], "password": new_password})
         profile = self.request("GET", "/users/me", token=login["access_token"])
-        self.assertTrue(profile["is_verified"])
+        self.assertNotIn("is_verified", profile)
         self.assertEqual(user["email"], profile["email"])
 
     def test_13_analytics_validation_and_role_access(self):
@@ -923,21 +905,13 @@ class PostgreSQLAcceptance(unittest.TestCase):
         self.assertEqual(429, response.status_code)
         self.assertEqual("60", response.headers.get("Retry-After"))
 
-    def test_25_changed_email_requires_confirmation_before_next_login(self):
+    def test_25_changed_email_keeps_session_and_allows_immediate_login_without_mail(self):
         new_email = f"changed-{uuid.uuid4().hex}@company.ru"
+        before = set((self.settings.DATA_DIR / "outbox").glob("*.json"))
         updated = self.request("PATCH", "/users/me", payload={"email": new_email})
-        self.assertFalse(updated["is_verified"])
-        self.request("GET", "/users/me", 403)
-        self.request("POST", "/auth/login", 403, role=None, payload={"email": new_email, "password": PASSWORD})
-        self.request("POST", "/auth/resend-verification", role=None, payload={"email": new_email})
-        messages = []
-        for path in (self.settings.DATA_DIR / "outbox").glob("*.json"):
-            content = json.loads(path.read_text(encoding="utf-8"))
-            if content.get("email") == new_email:
-                messages.append((path.stat().st_mtime_ns, content))
-        self.assertTrue(messages)
-        code = max(messages, key=lambda item: item[0])[1]["code"]
-        self.request("POST", "/auth/verify-email", role=None, payload={"email": new_email, "code": code})
+        self.assertNotIn("is_verified", updated)
+        self.assertEqual(new_email, self.request("GET", "/users/me")["email"])
+        self.assertEqual(before, set((self.settings.DATA_DIR / "outbox").glob("*.json")))
         result = self.request("POST", "/auth/login", role=None, payload={"email": new_email, "password": PASSWORD})
         profile = self.request("GET", "/users/me", token=result["access_token"])
         self.assertEqual(self.users["employee"]["id"], profile["id"])

@@ -4,7 +4,7 @@ import datetime as dt
 from server.core.time import office_now
 from typing import Optional
 
-from sqlalchemy import Boolean, CheckConstraint, Date, Integer, String
+from sqlalchemy import CheckConstraint, Date, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from server.models import Base
@@ -26,7 +26,6 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[dt.date] = mapped_column(Date, nullable=False, default=dt.date.today)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default=ROLE_EMPLOYEE)
-    is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     phone: Mapped[str] = mapped_column(String(40), nullable=False, default="", server_default="")
     avatar_url: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
 

@@ -5,7 +5,7 @@ from sqlalchemy import inspect, select, text
 from server.core.security import hash_password
 from server.database.session import SessionLocal, engine
 from server.models import Base
-from server.models.auth import AuthSession, PasswordResetCode, EmailVerificationCode
+from server.models.auth import AuthSession, PasswordResetCode
 from server.models.activity import Notification, TicketEvent, Upload
 from server.models.bookings import Booking
 from server.models.desk_features import DeskFeature
@@ -42,7 +42,7 @@ def seed_db() -> None:
             user = db.execute(select(User).where(User.email == email)).scalars().first()
             if user is None:
                 user = User(full_name=full_name, email=email,
-                            password_hash=hash_password("password123"), role=role, is_verified=True)
+                            password_hash=hash_password("password123"), role=role)
                 db.add(user)
                 db.flush()
             by_email[email] = user

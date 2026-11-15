@@ -1,4 +1,4 @@
-"""Administration from the trusted server terminal, without public role escalation."""
+"""Account administration from the server terminal."""
 import argparse
 import getpass
 from sqlalchemy import select
@@ -32,7 +32,7 @@ def main():
             password = getpass.getpass("Password (at least 10 characters): ")
             if len(password) < 10 or password != getpass.getpass("Confirm password: "):
                 parser.error("Password too short or confirmation differs")
-            db.add(User(full_name=args.name, email=args.email.strip().lower(), role=args.role, password_hash=hash_password(password), is_verified=True))
+            db.add(User(full_name=args.name, email=args.email.strip().lower(), role=args.role, password_hash=hash_password(password)))
         else:
             if not user:
                 parser.error("Account does not exist")

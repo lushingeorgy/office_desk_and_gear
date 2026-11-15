@@ -438,9 +438,12 @@ class NativeSmoke:
         self.screenshot("cold-login")
         self.click("Создать аккаунт")
         self.fill("Должность", "QA specialist")
+        self.click("Роль", scroll=True)
+        self.find("Офис-менеджер")
+        self.click("IT-администратор")
         self.screenshot("registration-job-title")
         self.fatal_check()
-        self.check("Native registration accepts a job title without administrative role selection",
+        self.check("Native registration accepts a job title and offers all three roles",
                    bool(adb("shell", "pidof", PACKAGE, required=False)))
         self.click("У меня уже есть аккаунт", scroll=True)
         self.find("С возвращением")

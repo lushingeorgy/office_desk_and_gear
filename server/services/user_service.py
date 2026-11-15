@@ -12,8 +12,7 @@ from server.core.security import hash_password, verify_password, hash_token_valu
 from server.dto.user_dto import UserDTO
 from server.models.users import User, ROLES, ROLE_EMPLOYEE
 from server.models.auth import utc_now
-from server.core.config import settings
-from server.core.exceptions import ForbiddenError, ConflictError
+from server.core.exceptions import ConflictError
 from server.services.mail_service import send_code
 from server.repositories.user_repository import UserRepository
 from server.repositories.auth_repository import AuthRepository
@@ -78,8 +77,8 @@ class UserService:
 
         role = getattr(payload, "role", DEFAULT_ROLE)
         role = role.value if isinstance(role, Enum) else role
-        if role != ROLE_EMPLOYEE:
-            raise ValidationError("При регистрации доступна только роль сотрудника")
+        if role not in ROLES:
+            raise ValidationError("Недопустимая роль пользователя")
         user = User(
             full_name=full_name,
             job_title=(getattr(payload, "job_title", "") or "").strip(),
@@ -87,14 +86,11 @@ class UserService:
             password_hash=hash_password(password),
             role=role,
             created_at=dt.date.today(),
-            is_verified=not settings.REQUIRE_EMAIL_VERIFICATION,
             bookings=[],
         )
         try:
             self.user_repository.session.add(user)
             self.user_repository.flush()
-            if not user.is_verified:
-                self._send_verification(user)
             self.user_repository.commit()
         except IntegrityError as error:
             self.user_repository.rollback()
@@ -114,8 +110,6 @@ class UserService:
         user = self.user_repository.get_user_by_email(_norm_email(email))
         if user is None or not verify_password(password or "", user.password_hash):
             raise UnauthorizedError("Неверный адрес почты или пароль")
-        if not user.is_verified:
-            raise ForbiddenError("Подтвердите электронную почту кодом из письма")
         return user
 
 
@@ -145,9 +139,6 @@ class UserService:
                 if self.user_repository.get_user_by_email(new_email) is not None:
                     raise BadRequestError("Эта почта уже используется другим сотрудником")
                 user.email = new_email
-                if settings.REQUIRE_EMAIL_VERIFICATION:
-                    user.is_verified = False
-                    self._send_verification(user)
 
         try:
             user = self.user_repository.update_user(user)
@@ -194,28 +185,6 @@ class UserService:
             user.id, hash_token_value(code), utc_now() + dt.timedelta(minutes=30)
         )
         return code
-
-    def _send_verification(self, user: User):
-        code = f"{secrets.randbelow(10 ** 6):06d}"
-        send_code(user.email, code, "Подтверждение электронной почты")
-        self.auth_repository.save_verification_code(
-            user.id, hash_token_value(code), utc_now() + dt.timedelta(minutes=30)
-        )
-
-    def resend_verification(self, email: str):
-        user = self.user_repository.get_user_by_email(_norm_email(email))
-        if user is not None and not user.is_verified:
-            self._send_verification(user)
-            self.user_repository.commit()
-
-    def verify_email(self, email: str, code: str):
-        user = self.user_repository.get_user_by_email(_norm_email(email))
-        if user is None:
-            raise ValidationError("Неверный или просроченный код подтверждения")
-        if not self.auth_repository.consume_verification_code(user.id, hash_token_value(code.strip())):
-            raise ValidationError("Неверный или просроченный код подтверждения")
-        user.is_verified = True
-        self.user_repository.commit()
 
     def confirm_reset(self, email: str, code: str, new_password: str) -> UserDTO:
         normalized = _validate_email(_norm_email(email))

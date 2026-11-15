@@ -31,6 +31,7 @@ from kivymd.uix.textfield import MDTextField, MDTextFieldHintText, MDTextFieldTr
 
 from client.core.config import API_BASE_URL
 from client.core.device import DeviceTools
+from client.core.roles import ROLES
 from client.core.storage import LocalState
 from client.core.worker import BackgroundWorker
 from client.floor_plan import FloorPlan
@@ -41,7 +42,6 @@ from client.ui import CameraPreview, LoadingLine, NavigationItem, PageHost, Star
 from client.viewmodels.session import SessionViewModel
 
 LOG = logging.getLogger(__name__)
-ROLES = {"employee": "Сотрудник", "office_manager": "Офис-менеджер", "it_admin": "IT-администратор"}
 STATUSES = {"new": "Новая", "in_progress": "В работе", "resolved": "Решена", "closed": "Закрыта",
             "in_stock": "На складе", "assigned": "Закреплена", "in_repair": "В ремонте", "written_off": "Списана"}
 EMAIL = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -432,19 +432,20 @@ class OfficeDeskGearApp(MDApp):
         self._menus.append(menu)
         return field
 
-    @staticmethod
-    def _choice_touch(field, touch, menu):
+    def _choice_touch(self, field, touch, menu):
         if field.collide_point(*touch.pos) and not getattr(touch, "is_mouse_scrolling", False):
             field.focus = False
+            if self.busy:
+                return True
             menu.width = field.width
             menu.open()
             return True
         return False
 
-    @staticmethod
-    def _choose(field, key, title):
-        field._choice, field.text = key, title
+    def _choose(self, field, key, title):
         field._menu.dismiss()
+        if not self.busy:
+            field._choice, field.text = key, title
 
     def card(self, title, description="", action=None):
         box = MDBoxLayout(orientation="vertical", adaptive_height=True, spacing=dp(8), padding=dp(18),
@@ -560,7 +561,6 @@ class OfficeDeskGearApp(MDApp):
         self.action("Войти", lambda: self._login(fields), True)
         self.action("Создать аккаунт", self.register)
         self.action("Забыли пароль?", self.reset)
-        self.action("Подтвердить рабочую почту", lambda: self._verify_entry(fields["email"]))
 
     def _login(self, fields):
         values = self.values(fields)
@@ -568,10 +568,6 @@ class OfficeDeskGearApp(MDApp):
             return
 
         def logged_in(data):
-            if isinstance(data, dict) and data.get("verify_email"):
-                self.verify(data["verify_email"])
-                self.note("Для входа сначала подтвердите рабочую почту")
-                return
             result, user = data
             try:
                 self.model.remember(result, user)
@@ -581,24 +577,13 @@ class OfficeDeskGearApp(MDApp):
                 return
             self.user = user
             self._open_initial_page()
-        def authenticate():
-            try:
-                return self.model.authenticate(**values)
-            except ApiError as error:
-                if error.status_code == 403:
-                    return {"verify_email": values["email"]}
-                raise
-        self.job(authenticate, logged_in, "Входим в аккаунт…", exclusive=True)
-
-    def _verify_entry(self, email_field):
-        values = self.values({"email": email_field})
-        if values:
-            self.verify(values["email"])
+        self.job(lambda: self.model.authenticate(**values), logged_in, "Входим в аккаунт…", exclusive=True)
 
     def register(self):
         self.page_start("register", "Создать аккаунт", "Укажите рабочую почту и данные профиля.")
         fields = {"full_name": self.field("ФИО", required=True)}
         fields["job_title"] = self.field("Должность")
+        fields["role"] = self.choice("Роль", ROLES, "employee")
         fields.update({"email": self.field("Рабочая почта", required=True, kind="email"),
                   "password": self.field("Пароль от 6 символов", required=True, secret=True),
                   "confirm_password": self.field("Повторите пароль", required=True, secret=True)})
@@ -609,42 +594,18 @@ class OfficeDeskGearApp(MDApp):
         values = self.values(fields)
         if not values:
             return
-        values["role"] = "employee"
+        values["role"] = fields["role"]._choice
         values["job_title"] = values["job_title"] or ""
         if len(values["password"]) < 6 or values["password"] != values["confirm_password"]:
             fields["confirm_password"].error = True
             self.note("Пароль — от 6 символов. Пароли должны совпадать", error=True)
             return
+        fields["role"]._menu.dismiss()
 
-        def registered(user):
-            if user.get("is_verified") is False:
-                self.verify(values["email"])
-            else:
-                self.login()
-                self.note("Профиль создан. Войдите в аккаунт", success=True)
+        def registered(_user):
+            self.login()
+            self.note("Профиль создан. Войдите в аккаунт", success=True)
         self.job(lambda: self.api.register(**values), registered, "Создаём профиль…", exclusive=True)
-
-    def verify(self, email):
-        self.page_start("verify", "Подтвердить почту", "Введите код из письма для " + email)
-        code = self.field("Код подтверждения", required=True, max_length=6)
-        self.action("Подтвердить", lambda: self._verify(email, code), True)
-        self.action("Отправить код ещё раз", lambda: self.job(lambda: self.api.resend_verification(email),
-                    lambda result: self.note(result.get("message", "Письмо отправлено"), success=True)))
-        self.action("Ко входу", self.login)
-
-    def _verify(self, email, code):
-        values = self.values({"code": code})
-        if values:
-            if re.fullmatch(r"[0-9]{6}", values["code"]) is None:
-                code.error = True
-                self.note("Код должен состоять из шести цифр", error=True)
-                return
-            self.job(lambda: self.api.verify_email(email, values["code"]),
-                     lambda _result: self._verified(), "Проверяем код…")
-
-    def _verified(self):
-        self.login()
-        self.note("Почта подтверждена. Теперь можно войти", success=True)
 
     def reset(self):
         self.page_start("reset", "Восстановить пароль", "Получите код на рабочую почту, затем задайте новый пароль.")
@@ -811,12 +772,6 @@ class OfficeDeskGearApp(MDApp):
             return self.api.update_me(**values)
 
         def saved(user):
-            if user.get("is_verified") is False:
-                self.model.forget()
-                self.user = None
-                self.verify(user["email"])
-                self.note("Новая почта ожидает подтверждения. Введите код из письма")
-                return
             self.user = user
             self.state.update_user(user)
             self.note("Профиль сохранён", success=True)
