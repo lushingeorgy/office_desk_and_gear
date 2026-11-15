@@ -75,7 +75,7 @@ class RemoteSuite(NativeSmoke):
                 'scope':self.scope,
                 'actors':{role:{k:v for k,v in value.items() if k!='password'} for role,value in self.actors.items()},'ids':self.ids,
                 'limitations':['Real phone optical QR/camera quality and physical printer are outside emulator coverage.',
-                               'Positive email-code confirmation is tested separately against the isolated emulator API.']}
+                               'Positive password-reset email-code checks run separately against the isolated emulator API.']}
         (self.directory/'result.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
 
     def top(self):
